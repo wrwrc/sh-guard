@@ -1331,6 +1331,14 @@ pub static COMMAND_RULES: &[CommandRule] = &[
     // =====================================================================
     // Git (weight 35)
     // =====================================================================
+    // NOTE: for an actual `git`/`/usr/bin/git` invocation, `analyzer.rs`
+    // bypasses this rule's `intent`/`reversibility`/`dangerous_flags` in
+    // favor of `rules::git::classify`, which is subcommand-aware (see
+    // `rules/git.rs`). This entry is retained so that `lookup_command`
+    // still resolves "git" (used by `RuleSet::lookup_user_command`'s
+    // built-in-override check, and by the `test_rules_commands.rs` tests
+    // that exercise this table directly) and so custom rules can't
+    // register a user-defined "git" command that would shadow it.
     CommandRule {
         name: "git",
         intent: Intent::GitMutation,

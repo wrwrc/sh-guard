@@ -69,8 +69,19 @@ ps aux | grep node | safe | 0-20
 grep error log.txt | wc -l | safe | 0-20
 ls -la | sort -k5 -n | safe | 0-20
 
-# Git read-only (note: git commands score as caution in our engine)
-# These are intentionally not listed here because git scores 45
+# Git read-only (subcommand-aware: status/log/diff/branch/remote -v etc.
+# are Intent::Info and score 0, unlike git mutations which stay caution+)
+git status | safe | 0-20
+git log --oneline | safe | 0-20
+git diff | safe | 0-20
+git branch | safe | 0-20
+git remote -v | safe | 0-20
+git log | head -20 | safe | 0-20
+git show HEAD | safe | 0-20
+git blame README.md | safe | 0-20
+git ls-files | safe | 0-20
+git rev-parse HEAD | safe | 0-20
+git describe --tags | safe | 0-20
 
 # Simple variable reference
 echo hello world | safe | 0-20

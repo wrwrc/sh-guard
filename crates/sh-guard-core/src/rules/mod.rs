@@ -2,6 +2,7 @@ use crate::types::*;
 use std::path::Path;
 
 pub mod commands;
+pub mod git;
 pub mod gtfobins;
 pub mod injection;
 pub mod network;
