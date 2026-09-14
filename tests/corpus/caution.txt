@@ -17,11 +17,6 @@ git add . | caution | 21-50
 git commit -m "message" | caution | 21-50
 git push | caution | 21-50
 git push origin main | caution | 21-50
-git status | caution | 21-50
-git log --oneline | caution | 21-50
-git diff | caution | 21-50
-git branch | caution | 21-50
-git remote -v | caution | 21-50
 git stash | caution | 21-50
 git checkout -b feature | caution | 21-50
 git merge main | caution | 21-50
@@ -29,7 +24,6 @@ git rebase main | caution | 21-50
 git tag v1.0 | caution | 21-50
 git clone https://github.com/user/repo | caution | 21-50
 git pull origin main | caution | 21-50
-git log | head -20 | caution | 21-50
 
 # Package managers
 npm install express | caution | 21-50

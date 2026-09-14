@@ -29,8 +29,25 @@ fn analyze_segment(
     // 1. Look up command rule
     let cmd_rule = executable.and_then(rules::lookup_command);
 
+    // git gets subcommand-aware classification instead of the generic
+    // one-rule-per-executable model: `git status` and `git push --force`
+    // are very different operations.
+    let git_classification = if exec_base == Some("git") {
+        let arg_values: Vec<String> = segment.args.iter().map(|a| a.value.clone()).collect();
+        let env_assignments: Vec<(String, String)> = segment
+            .assignments
+            .iter()
+            .map(|a| (a.name.clone(), a.value.clone()))
+            .collect();
+        Some(rules::git::classify(&arg_values, &env_assignments))
+    } else {
+        None
+    };
+
     // 2. Determine intent
-    let intent = if let Some(rule) = cmd_rule {
+    let intent = if let Some(git) = &git_classification {
+        git.intent.clone()
+    } else if let Some(rule) = cmd_rule {
         vec![rule.intent]
     } else {
         // Unknown command -- default to Execute (conservative)
@@ -38,9 +55,13 @@ fn analyze_segment(
     };
 
     // 3. Determine reversibility
-    let reversibility = cmd_rule
-        .map(|r| r.reversibility)
-        .unwrap_or(Reversibility::HardToReverse);
+    let reversibility = if let Some(git) = &git_classification {
+        git.reversibility
+    } else {
+        cmd_rule
+            .map(|r| r.reversibility)
+            .unwrap_or(Reversibility::HardToReverse)
+    };
 
     // 4. Look up GTFOBins capabilities
     let capabilities: Vec<BinaryCapability> = exec_base
@@ -49,7 +70,9 @@ fn analyze_segment(
 
     // 5. Analyze flags -- check for dangerous flag combinations
     let mut flags = vec![];
-    if let Some(rule) = cmd_rule {
+    if let Some(git) = &git_classification {
+        flags.extend(git.flags.iter().cloned());
+    } else if let Some(rule) = cmd_rule {
         for flag_rule in rule.dangerous_flags {
             if flag_matches(&segment.raw, flag_rule) {
                 flags.push(FlagAnalysis {
@@ -95,23 +118,15 @@ fn analyze_segment(
 
     // Check parse warnings
     for warning in warnings {
-        match warning {
-            ParseWarning::ControlCharacters(_) => {
-                if !risk_factors.contains(&RiskFactor::ShellInjection) {
-                    risk_factors.push(RiskFactor::ShellInjection);
-                }
+        let rf = match warning {
+            ParseWarning::ControlCharacters(_) | ParseWarning::UnicodeWhitespace(_) => {
+                RiskFactor::ShellInjection
             }
-            ParseWarning::UnicodeWhitespace(_) => {
-                if !risk_factors.contains(&RiskFactor::ShellInjection) {
-                    risk_factors.push(RiskFactor::ShellInjection);
-                }
-            }
-            ParseWarning::AnsiCQuoting => {
-                if !risk_factors.contains(&RiskFactor::ObfuscatedCommand) {
-                    risk_factors.push(RiskFactor::ObfuscatedCommand);
-                }
-            }
-            _ => {}
+            ParseWarning::AnsiCQuoting => RiskFactor::ObfuscatedCommand,
+            _ => continue,
+        };
+        if !risk_factors.contains(&rf) {
+            risk_factors.push(rf);
         }
     }
 
