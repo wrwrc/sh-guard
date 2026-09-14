@@ -118,23 +118,15 @@ fn analyze_segment(
 
     // Check parse warnings
     for warning in warnings {
-        match warning {
-            ParseWarning::ControlCharacters(_) => {
-                if !risk_factors.contains(&RiskFactor::ShellInjection) {
-                    risk_factors.push(RiskFactor::ShellInjection);
-                }
+        let rf = match warning {
+            ParseWarning::ControlCharacters(_) | ParseWarning::UnicodeWhitespace(_) => {
+                RiskFactor::ShellInjection
             }
-            ParseWarning::UnicodeWhitespace(_) => {
-                if !risk_factors.contains(&RiskFactor::ShellInjection) {
-                    risk_factors.push(RiskFactor::ShellInjection);
-                }
-            }
-            ParseWarning::AnsiCQuoting => {
-                if !risk_factors.contains(&RiskFactor::ObfuscatedCommand) {
-                    risk_factors.push(RiskFactor::ObfuscatedCommand);
-                }
-            }
-            _ => {}
+            ParseWarning::AnsiCQuoting => RiskFactor::ObfuscatedCommand,
+            _ => continue,
+        };
+        if !risk_factors.contains(&rf) {
+            risk_factors.push(rf);
         }
     }
 
