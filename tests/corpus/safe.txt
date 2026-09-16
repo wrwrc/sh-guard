@@ -144,3 +144,10 @@ tail -1 file.txt | safe | 0-20
 grep -v comment file.txt | safe | 0-20
 grep -w word file.txt | safe | 0-20
 ls /var | safe | 0-20
+
+# GitHub CLI (gh) — read-only
+gh pr list | safe | 0-20
+gh issue view 1 | safe | 0-20
+gh repo view | safe | 0-20
+gh run list | safe | 0-20
+gh api repos/owner/repo/issues | safe | 0-20
