@@ -86,7 +86,15 @@ fn analyze_segment(
     let targets = extract_targets(segment, ctx, exec_base);
 
     // 7. Collect risk factors from flags, injection patterns, zsh rules
-    let mut risk_factors: Vec<RiskFactor> = flags.iter().map(|f| f.risk_factor).collect();
+    // Deduplicated: two different flags can carry the same risk factor
+    // (e.g. kubectl's `delete --all` and a cluster-critical namespace both
+    // yield BroadScope), and the reason string would otherwise repeat it.
+    let mut risk_factors: Vec<RiskFactor> = vec![];
+    for f in &flags {
+        if !risk_factors.contains(&f.risk_factor) {
+            risk_factors.push(f.risk_factor);
+        }
+    }
 
     // Check injection patterns on the raw command text.
     // NOTE: We pass `raw` as both `unquoted` and `raw` because we do not yet

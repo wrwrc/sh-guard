@@ -138,6 +138,7 @@ pub fn generate_reason(analysis: &CommandAnalysis) -> String {
             RiskFactor::PipeToExecution => "output piped to execution",
             RiskFactor::UntrustedExecution => "execution of untrusted content",
             RiskFactor::PrivilegeEscalation => "privilege escalation",
+            RiskFactor::SecretsExposure => "secrets exposure",
             RiskFactor::GitHistoryDestruction => "git history destruction",
             RiskFactor::EscapesProjectBoundary => "escapes project boundary",
             RiskFactor::ShellInjection => "shell injection pattern",
