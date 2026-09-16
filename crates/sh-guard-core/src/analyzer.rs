@@ -29,40 +29,21 @@ fn analyze_segment(
     // 1. Look up command rule
     let cmd_rule = executable.and_then(rules::lookup_command);
 
-    // git gets subcommand-aware classification instead of the generic
-    // one-rule-per-executable model: `git status` and `git push --force`
-    // are very different operations.
-    let git_classification = if exec_base == Some("git") {
-        let arg_values: Vec<String> = segment.args.iter().map(|a| a.value.clone()).collect();
-        let env_assignments: Vec<(String, String)> = segment
-            .assignments
-            .iter()
-            .map(|a| (a.name.clone(), a.value.clone()))
-            .collect();
-        Some(rules::git::classify(&arg_values, &env_assignments))
-    } else {
-        None
-    };
-
-    // `gh` gets the same subcommand-aware treatment as `git`: `gh pr list`
-    // and `gh repo delete --yes` are very different operations.
-    let gh_classification = if exec_base == Some("gh") {
-        let arg_values: Vec<String> = segment.args.iter().map(|a| a.value.clone()).collect();
-        let env_assignments: Vec<(String, String)> = segment
-            .assignments
-            .iter()
-            .map(|a| (a.name.clone(), a.value.clone()))
-            .collect();
-        Some(rules::gh::classify(&arg_values, &env_assignments))
-    } else {
-        None
-    };
+    // Some commands (git, gh, find, fd/fdfind) get subcommand/flag-aware
+    // classification instead of the generic one-rule-per-executable model:
+    // `git status` vs `git push --force`, `find . -name x` vs
+    // `find . -exec rm -rf {} +`, etc. See `rules::classify_special`.
+    let arg_values: Vec<String> = segment.args.iter().map(|a| a.value.clone()).collect();
+    let env_assignments: Vec<(String, String)> = segment
+        .assignments
+        .iter()
+        .map(|a| (a.name.clone(), a.value.clone()))
+        .collect();
+    let special = rules::classify_special(exec_base, &arg_values, &env_assignments);
 
     // 2. Determine intent
-    let intent = if let Some(git) = &git_classification {
-        git.intent.clone()
-    } else if let Some(gh) = &gh_classification {
-        gh.intent.clone()
+    let intent = if let Some(special) = &special {
+        special.intent.clone()
     } else if let Some(rule) = cmd_rule {
         vec![rule.intent]
     } else {
@@ -71,10 +52,8 @@ fn analyze_segment(
     };
 
     // 3. Determine reversibility
-    let reversibility = if let Some(git) = &git_classification {
-        git.reversibility
-    } else if let Some(gh) = &gh_classification {
-        gh.reversibility
+    let reversibility = if let Some(special) = &special {
+        special.reversibility
     } else {
         cmd_rule
             .map(|r| r.reversibility)
@@ -88,10 +67,8 @@ fn analyze_segment(
 
     // 5. Analyze flags -- check for dangerous flag combinations
     let mut flags = vec![];
-    if let Some(git) = &git_classification {
-        flags.extend(git.flags.iter().cloned());
-    } else if let Some(gh) = &gh_classification {
-        flags.extend(gh.flags.iter().cloned());
+    if let Some(special) = &special {
+        flags.extend(special.flags.iter().cloned());
     } else if let Some(rule) = cmd_rule {
         for flag_rule in rule.dangerous_flags {
             if flag_matches(&segment.raw, flag_rule) {
@@ -106,7 +83,7 @@ fn analyze_segment(
     }
 
     // 6. Determine targets (from args that look like paths)
-    let targets = extract_targets(segment, ctx);
+    let targets = extract_targets(segment, ctx, exec_base);
 
     // 7. Collect risk factors from flags, injection patterns, zsh rules
     let mut risk_factors: Vec<RiskFactor> = flags.iter().map(|f| f.risk_factor).collect();
@@ -165,7 +142,12 @@ fn analyze_segment(
 
 /// Check if a command's raw text contains the flag pattern.
 /// The `flags` array represents a conjunction: ALL patterns must be present.
-fn flag_matches(raw: &str, flag_rule: &rules::FlagRule) -> bool {
+///
+/// `pub(crate)` so `rules::find_fd` can reuse it to match a `-exec`/`-x`
+/// payload's own `dangerous_flags` against its (already-tokenized, quote-
+/// aware) argv, exactly as it would be matched for a real top-level
+/// invocation of that command.
+pub(crate) fn flag_matches(raw: &str, flag_rule: &rules::FlagRule) -> bool {
     let words: Vec<&str> = raw.split_whitespace().collect();
     flag_rule.flags.iter().all(|pattern| {
         // Each pattern element must match a word in the raw text
@@ -179,30 +161,53 @@ fn flag_matches(raw: &str, flag_rule: &rules::FlagRule) -> bool {
 }
 
 /// Extract targets from command arguments.
-fn extract_targets(segment: &CommandSegment, ctx: Option<&ClassifyContext>) -> Vec<Target> {
+///
+/// `exec_base` special-cases `fd`/`fdfind`: unlike `find` (where every
+/// positional is a path), fd's grammar is
+/// `fd [FLAGS/OPTIONS] [<pattern>] [<path>...]` -- the first positional is
+/// a search *pattern*, not a path, so it must never be misread as one (see
+/// `rules::find_fd::fd_target_paths`).
+fn extract_targets(
+    segment: &CommandSegment,
+    ctx: Option<&ClassifyContext>,
+    exec_base: Option<&str>,
+) -> Vec<Target> {
     let mut targets = vec![];
 
-    for arg in &segment.args {
-        // Skip flags (start with -)
-        if arg.value.starts_with('-') {
-            continue;
-        }
-
-        // Check if this looks like a path
-        let val = &arg.value;
-        if val.starts_with('/')
-            || val.starts_with('.')
-            || val.starts_with('~')
-            || val.contains('/')
-            || val == "*"
-        {
-            let scope = context::resolve_scope(val, ctx);
-            let sensitivity = context::resolve_sensitivity(val, ctx);
+    if matches!(exec_base, Some("fd") | Some("fdfind")) {
+        let arg_values: Vec<String> = segment.args.iter().map(|a| a.value.clone()).collect();
+        for val in rules::find_fd::fd_target_paths(&arg_values) {
+            let scope = context::resolve_scope(&val, ctx);
+            let sensitivity = context::resolve_sensitivity(&val, ctx);
             targets.push(Target {
-                path: Some(val.clone()),
+                path: Some(val),
                 scope,
                 sensitivity,
             });
+        }
+    } else {
+        for arg in &segment.args {
+            // Skip flags (start with -)
+            if arg.value.starts_with('-') {
+                continue;
+            }
+
+            // Check if this looks like a path
+            let val = &arg.value;
+            if val.starts_with('/')
+                || val.starts_with('.')
+                || val.starts_with('~')
+                || val.contains('/')
+                || val == "*"
+            {
+                let scope = context::resolve_scope(val, ctx);
+                let sensitivity = context::resolve_sensitivity(val, ctx);
+                targets.push(Target {
+                    path: Some(val.clone()),
+                    scope,
+                    sensitivity,
+                });
+            }
         }
     }
 

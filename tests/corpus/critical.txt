@@ -87,3 +87,18 @@ gh repo delete owner/repo --yes | critical | 81-100
 gh api -X DELETE repos/owner/repo | critical | 81-100
 gh extension install owner/gh-foo | critical | 81-100
 gh codespace ssh | critical | 81-100
+
+# find/fd — payload-aware -exec/-x escalation (inherits the payload's own
+# destructiveness instead of a flat modifier)
+find . -exec rm -rf {} + | critical | 81-100
+find / -delete | critical | 81-100
+find ~ -delete | critical | 81-100
+find . -name '*.log' -delete | critical | 81-100
+fd -x rm -rf | critical | 81-100
+fd . -x chmod 777 | critical | 81-100
+fd -x git push --force | critical | 81-100
+find . -fprint /etc/passwd | critical | 81-100
+
+# find -exec -- moved here from gtfobins.txt: sh -c payload now inherits
+# sh's own Execute classification plus root-scope amplification
+find / -exec /bin/sh \; | critical | 81-100

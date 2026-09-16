@@ -36,7 +36,6 @@ nmap --script=http-enum target | danger | 51-80
 vim -c '!sh' | danger | 51-80
 
 # Danger — find with exec
-find / -exec /bin/sh \; | danger | 51-80
 
 # Critical — sensitive file access/exfil via tool abuse
 sed -n '1p' /etc/shadow | critical | 81-100
