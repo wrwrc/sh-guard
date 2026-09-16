@@ -96,3 +96,8 @@ cat /etc/shadow | base64 | caution | 21-50
 # Crontab
 crontab -e | caution | 21-50
 echo hello | tee out.txt | caution | 21-50
+
+# GitHub CLI (gh) — remote mutations
+gh pr create --title foo --body bar | caution | 21-50
+gh issue comment 1 --body hello | caution | 21-50
+gh workflow run ci.yml | caution | 21-50

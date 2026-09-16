@@ -44,9 +44,25 @@ fn analyze_segment(
         None
     };
 
+    // `gh` gets the same subcommand-aware treatment as `git`: `gh pr list`
+    // and `gh repo delete --yes` are very different operations.
+    let gh_classification = if exec_base == Some("gh") {
+        let arg_values: Vec<String> = segment.args.iter().map(|a| a.value.clone()).collect();
+        let env_assignments: Vec<(String, String)> = segment
+            .assignments
+            .iter()
+            .map(|a| (a.name.clone(), a.value.clone()))
+            .collect();
+        Some(rules::gh::classify(&arg_values, &env_assignments))
+    } else {
+        None
+    };
+
     // 2. Determine intent
     let intent = if let Some(git) = &git_classification {
         git.intent.clone()
+    } else if let Some(gh) = &gh_classification {
+        gh.intent.clone()
     } else if let Some(rule) = cmd_rule {
         vec![rule.intent]
     } else {
@@ -57,6 +73,8 @@ fn analyze_segment(
     // 3. Determine reversibility
     let reversibility = if let Some(git) = &git_classification {
         git.reversibility
+    } else if let Some(gh) = &gh_classification {
+        gh.reversibility
     } else {
         cmd_rule
             .map(|r| r.reversibility)
@@ -72,6 +90,8 @@ fn analyze_segment(
     let mut flags = vec![];
     if let Some(git) = &git_classification {
         flags.extend(git.flags.iter().cloned());
+    } else if let Some(gh) = &gh_classification {
+        flags.extend(gh.flags.iter().cloned());
     } else if let Some(rule) = cmd_rule {
         for flag_rule in rule.dangerous_flags {
             if flag_matches(&segment.raw, flag_rule) {

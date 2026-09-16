@@ -1,7 +1,9 @@
 use crate::types::*;
 use std::path::Path;
 
+pub mod cli_args;
 pub mod commands;
+pub mod gh;
 pub mod git;
 pub mod gtfobins;
 pub mod injection;

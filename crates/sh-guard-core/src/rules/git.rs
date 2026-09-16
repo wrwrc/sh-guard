@@ -24,6 +24,7 @@
 //!    for `--hard`), erring toward flagging when a prefix is ambiguous
 //!    between a dangerous and a safe option.
 
+use super::cli_args;
 use crate::types::{FlagAnalysis, Intent, Reversibility, RiskFactor};
 
 /// Result of classifying a git invocation.
@@ -72,7 +73,7 @@ const GLOBAL_OPTS_NO_VALUE: &[&str] = &[
 /// `GIT_*` environment variables that let an otherwise-innocuous git
 /// invocation run an arbitrary command (pagers, diff/merge drivers, SSH
 /// transport, editors) or smuggle extra config in.
-fn is_dangerous_git_env(name: &str) -> bool {
+pub(crate) fn is_dangerous_git_env(name: &str) -> bool {
     matches!(
         name,
         "GIT_PAGER"
@@ -95,7 +96,7 @@ fn is_dangerous_git_env(name: &str) -> bool {
 /// invoke an external program (pager, editor, ssh, diff/merge/filter
 /// drivers, credential helpers, hooks) or change the trust boundary
 /// (`safe.directory`, `include*`, `protocol.*.allow`).
-fn is_dangerous_config_key(raw_key: &str) -> bool {
+pub(crate) fn is_dangerous_config_key(raw_key: &str) -> bool {
     let key = raw_key.to_ascii_lowercase();
 
     const EXACT: &[&str] = &[
@@ -462,53 +463,19 @@ fn scan_global_options(args: &[String]) -> GlobalScan {
 /// tends to get flagged by at least one of them (erring toward flagging).
 /// `--no-<name>` is treated as an explicit negation, never a match.
 fn has_flag(args: &[String], short: Option<char>, longs: &[&str]) -> bool {
-    args.iter().any(|a| flag_token_matches(a, short, longs))
-}
-
-fn flag_token_matches(a: &str, short: Option<char>, longs: &[&str]) -> bool {
-    if let Some(name) = a.strip_prefix("--") {
-        let name = name.split('=').next().unwrap_or(name);
-        if name.starts_with("no-") {
-            return false;
-        }
-        if longs.contains(&name) {
-            return true;
-        }
-        if name.len() >= 3 {
-            return longs.iter().any(|l| l.starts_with(name));
-        }
-        false
-    } else if let Some(cluster) = a.strip_prefix('-') {
-        match short {
-            Some(c) => {
-                !cluster.is_empty()
-                    && !cluster.starts_with('-')
-                    && cluster.chars().all(|ch| ch.is_ascii_alphabetic())
-                    && cluster.contains(c)
-            }
-            None => false,
-        }
-    } else {
-        false
-    }
+    // git supports unambiguous long-option-prefix abbreviation.
+    cli_args::has_flag(args, short, longs, true)
 }
 
 fn has_exact(args: &[String], token: &str) -> bool {
-    args.iter().any(|a| a == token)
+    cli_args::has_exact(args, token)
 }
 
 fn positional_count(args: &[String]) -> usize {
-    args.iter().filter(|a| !a.starts_with('-')).count()
+    cli_args::positional_count(args)
 }
 
-fn flag(modifier: i8, risk_factor: RiskFactor, flag: &str, description: &str) -> FlagAnalysis {
-    FlagAnalysis {
-        flag: flag.to_string(),
-        modifier,
-        risk_factor,
-        description: description.to_string(),
-    }
-}
+use cli_args::flag;
 
 // ========================================================
 // Per-subcommand classifiers
@@ -931,29 +898,7 @@ fn classify_clean(args: &[String]) -> GitClassification {
 /// branch name, a start-point, a `--source` revision, ...) doesn't get
 /// mistaken for a target pathspec when counting "real" positionals.
 fn effective_positionals(args: &[String], value_flags: &[&str]) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        let a = &args[i];
-        if value_flags.contains(&a.as_str()) {
-            i += 2; // skip the flag and the value it consumes
-            continue;
-        }
-        if value_flags
-            .iter()
-            .any(|f| a.starts_with(&format!("{}=", f)))
-        {
-            i += 1; // fused `--flag=value` form: no separate token consumed
-            continue;
-        }
-        if a.starts_with('-') {
-            i += 1;
-            continue;
-        }
-        out.push(a.clone());
-        i += 1;
-    }
-    out
+    cli_args::effective_positionals(args, value_flags)
 }
 
 /// True if a lone positional looks like a pathspec rather than a plain

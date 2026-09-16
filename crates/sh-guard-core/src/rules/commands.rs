@@ -1398,6 +1398,27 @@ pub static COMMAND_RULES: &[CommandRule] = &[
         mitre: None,
     },
     // =====================================================================
+    // GitHub CLI (weight 40)
+    // =====================================================================
+    // NOTE: for an actual `gh`/`/opt/homebrew/bin/gh` invocation,
+    // `analyzer.rs` bypasses this rule's `intent`/`reversibility`/
+    // `dangerous_flags` in favor of `rules::gh::classify`, which is
+    // subcommand-aware (see `rules/gh.rs`). This entry is retained (with an
+    // empty `dangerous_flags`, mirroring git's) so that `lookup_command`
+    // still resolves "gh" and so custom rules can't register a
+    // user-defined "gh" command that would shadow it. No code path scores
+    // against this table directly for "gh" today, so a raw-text
+    // `dangerous_flags` fallback here would be dead weight.
+    CommandRule {
+        name: "gh",
+        intent: Intent::EnvModify,
+        base_weight: 40,
+        reversibility: Reversibility::HardToReverse,
+        capabilities: &[BinaryCapability::Command],
+        dangerous_flags: &[],
+        mitre: None,
+    },
+    // =====================================================================
     // Environment (weight 40)
     // =====================================================================
     CommandRule {
