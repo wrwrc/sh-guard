@@ -109,3 +109,8 @@ kubectl -n kube-system delete pod --all | critical | 81-100
 kubectl exec pod -- rm -rf / | critical | 81-100
 kubectl run x --image=alpine --privileged | critical | 81-100
 kubectl create clusterrolebinding x --clusterrole=cluster-admin --user=me | critical | 81-100
+
+# xargs — payload-led: the payload's own risk drives the score
+xargs rm | critical | 81-100
+xargs rm -rf | critical | 81-100
+xargs git push --force | critical | 81-100

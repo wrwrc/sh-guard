@@ -692,15 +692,18 @@ fn docker_privileged() {
 
 #[test]
 fn kubectl_delete() {
+    // kubectl's table entry is a lookup fallback only: `analyzer` (and the
+    // exec-payload dispatch) route kubectl through `rules::kubectl`, which
+    // classifies `delete`/`exec` by verb, resource and payload. The old
+    // raw-text flag rules here were unreachable and coarser than that
+    // classifier, so they were removed; the behaviour they stood for is
+    // asserted in `test_rules_kubectl.rs` instead.
     let r = lookup("kubectl");
     assert_eq!(r.intent, Intent::Execute);
-    let has_delete = r
-        .dangerous_flags
-        .iter()
-        .any(|f| f.flags.contains(&"delete"));
-    assert!(has_delete, "kubectl must have delete flag");
-    let has_exec = r.dangerous_flags.iter().any(|f| f.flags.contains(&"exec"));
-    assert!(has_exec, "kubectl must have exec flag");
+    assert!(
+        r.dangerous_flags.is_empty(),
+        "kubectl is classified by rules::kubectl, not by table flags"
+    );
 }
 
 // ========================================================
@@ -731,9 +734,10 @@ fn every_command_is_lookupable() {
 
 #[test]
 fn commands_with_flags_are_correct() {
+    // NOTE: kubectl is deliberately absent -- it is classified by
+    // `rules::kubectl`, so its table entry carries no flag rules.
     let expected_flagged = &[
-        "rm", "curl", "wget", "git", "chmod", "find", "ssh", "npm", "docker", "kubectl", "tar",
-        "sed",
+        "rm", "curl", "wget", "git", "chmod", "find", "ssh", "npm", "docker", "tar", "sed",
     ];
     for &name in expected_flagged {
         let r = lookup(name);
