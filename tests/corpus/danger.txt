@@ -110,3 +110,7 @@ gh repo archive owner/repo | danger | 51-80
 gh secret delete FOO | danger | 51-80
 gh auth token | danger | 51-80
 gh cache delete --all | danger | 51-80
+
+# fd -x/--exec-batch — an unknown payload (or a shell) is code execution;
+# a harmless payload inherits its own low intent instead (see safe.txt)
+fd -X sh -c id | danger | 51-80

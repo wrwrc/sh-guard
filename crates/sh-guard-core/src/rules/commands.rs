@@ -197,6 +197,16 @@ pub static COMMAND_RULES: &[CommandRule] = &[
     // =====================================================================
     // Search commands (weight 5)
     // =====================================================================
+    // NOTE: for an actual `find`/`/usr/bin/find` invocation, `analyzer.rs`
+    // bypasses this rule's `intent`/`reversibility`/`dangerous_flags` in
+    // favor of `rules::find_fd::classify_find`, which is payload-aware:
+    // `-exec`/`-execdir`/`-ok`/`-okdir`'s own command is classified and
+    // folded in (see `rules/find_fd.rs`), rather than every `-exec` scoring
+    // the same flat modifier regardless of whether it runs `echo` or
+    // `rm -rf`. This entry (with its old flat `dangerous_flags`, now dead
+    // weight for a real invocation) is retained so `lookup_command` still
+    // resolves "find" and custom rules can't register a user-defined
+    // "find" that would shadow it.
     CommandRule {
         name: "find",
         intent: Intent::Search,
@@ -243,8 +253,27 @@ pub static COMMAND_RULES: &[CommandRule] = &[
         dangerous_flags: &[],
         mitre: None,
     },
+    // NOTE: for an actual `fd`/`fdfind`/`/opt/homebrew/bin/fd` invocation,
+    // `analyzer.rs` bypasses this rule's `intent`/`reversibility`/
+    // `dangerous_flags` in favor of `rules::find_fd::classify_fd`, which is
+    // payload-aware for `-x`/`-X`/`--exec`/`--exec-batch` (see
+    // `rules/find_fd.rs`) -- previously these ran an arbitrary command per
+    // match with no risk signal at all (`dangerous_flags: &[]`). This entry
+    // is retained so `lookup_command` still resolves "fd" and custom rules
+    // can't register a user-defined "fd" that would shadow it.
     CommandRule {
         name: "fd",
+        intent: Intent::Search,
+        base_weight: 5,
+        reversibility: Reversibility::Reversible,
+        capabilities: &[],
+        dangerous_flags: &[],
+        mitre: None,
+    },
+    // Debian/Ubuntu ship fd's binary as `fdfind` (the name `fd` is taken by
+    // another package); same fallback rationale as the `fd` entry above.
+    CommandRule {
+        name: "fdfind",
         intent: Intent::Search,
         base_weight: 5,
         reversibility: Reversibility::Reversible,

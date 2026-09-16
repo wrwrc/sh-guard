@@ -151,3 +151,26 @@ gh issue view 1 | safe | 0-20
 gh repo view | safe | 0-20
 gh run list | safe | 0-20
 gh api repos/owner/repo/issues | safe | 0-20
+
+# find/fd — plain reads
+find . -type f | safe | 0-20
+find . -name '*.rs' -print | safe | 0-20
+fd pattern | safe | 0-20
+fd -e rs | safe | 0-20
+fd ~/.ssh | safe | 0-20
+fd --hidden pattern | safe | 0-20
+fd -HI pattern | safe | 0-20
+find . -perm -4000 -print | safe | 0-20
+find . -L -name '*.txt' | safe | 0-20
+
+# find/fd — false positives (flag values that look like actions/patterns)
+find . -name -delete | safe | 0-20
+find . -name "-exec" | safe | 0-20
+fd 'rm -rf' . | safe | 0-20
+
+# find/fd exec with a harmless payload: the payload's own intent leads, so
+# these stay low while a destructive payload (fd -x rm -rf) goes critical
+fd -e rs -x echo | safe | 0-20
+fd --exec-batch echo -- -x | safe | 0-20
+find . -exec ls -la {} + | safe | 0-20
+find . -exec wc -l {} + | safe | 0-20

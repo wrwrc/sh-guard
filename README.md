@@ -237,7 +237,7 @@ docker run --rm ghcr.io/aryanbhosale/sh-guard --json "sudo rm -rf /"
 
 | Category | Count | Examples |
 |----------|-------|---------|
-| Command rules | 158 | coreutils, git, gh, curl, docker, kubectl, cloud CLIs |
+| Command rules | 159 | coreutils, git, gh, curl, docker, kubectl, cloud CLIs |
 | Path rules | 51 | .env, .ssh/, /etc/passwd, config files |
 | Injection patterns | 25 | command substitution, IFS injection, unicode tricks |
 | Zsh-specific rules | 15 | module loading, glob qualifiers, equals expansion |

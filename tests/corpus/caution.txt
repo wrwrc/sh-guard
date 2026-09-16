@@ -81,7 +81,6 @@ systemctl stop nginx | caution | 21-50
 service apache2 stop | caution | 21-50
 
 # Filesystem searches with side effects
-find . -name '*.log' -delete | caution | 21-50
 
 # Other cautious ops
 dd if=/dev/zero of=file bs=1M count=1 | caution | 21-50
@@ -101,3 +100,6 @@ echo hello | tee out.txt | caution | 21-50
 gh pr create --title foo --body bar | caution | 21-50
 gh issue comment 1 --body hello | caution | 21-50
 gh workflow run ci.yml | caution | 21-50
+
+# find — writes its output to an arbitrary file
+find . -fprintf out.txt %p | caution | 21-50
