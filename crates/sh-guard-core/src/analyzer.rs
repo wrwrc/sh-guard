@@ -194,14 +194,28 @@ fn extract_targets(
             });
         }
     } else {
-        for arg in &segment.args {
+        // For a wrapper (`sudo`/`watch`/`ssh <host> <cmd>`/...), the payload
+        // may arrive as one quoted script string, whose paths would
+        // otherwise be invisible here -- so scan the payload's own tokens
+        // alongside the segment's arguments.
+        let mut values: Vec<String> = segment.args.iter().map(|a| a.value.clone()).collect();
+        if let Some(name) = exec_base {
+            if rules::wrappers::is_wrapper(name) {
+                for tok in rules::wrappers::payload_tokens(name, &values) {
+                    if !values.contains(&tok) {
+                        values.push(tok);
+                    }
+                }
+            }
+        }
+
+        for val in &values {
             // Skip flags (start with -)
-            if arg.value.starts_with('-') {
+            if val.starts_with('-') {
                 continue;
             }
 
             // Check if this looks like a path
-            let val = &arg.value;
             if val.starts_with('/')
                 || val.starts_with('.')
                 || val.starts_with('~')

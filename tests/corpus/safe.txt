@@ -175,6 +175,23 @@ fd --exec-batch echo -- -x | safe | 0-20
 find . -exec ls -la {} + | safe | 0-20
 find . -exec wc -l {} + | safe | 0-20
 
+# Subcommand tools: read-only verbs
+docker ps | safe | 0-20
+docker images | safe | 0-20
+docker ps | grep running | safe | 0-20
+npm ls | safe | 0-20
+brew list | safe | 0-20
+systemctl status nginx | safe | 0-20
+service nginx status | safe | 0-20
+
+# env/printenv print the environment; a wrapper with a read payload is a read
+env | safe | 0-20
+env | grep PATH | safe | 0-20
+env ls | safe | 0-20
+nohup ls | safe | 0-20
+timeout 5 ls | safe | 0-20
+watch ls | safe | 0-20
+
 # kubectl — read-only verbs
 kubectl get pods | safe | 0-20
 kubectl get pods -o name | safe | 0-20

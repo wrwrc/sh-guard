@@ -260,7 +260,19 @@ fn reason_for_read_mentions_read() {
 
 #[test]
 fn reason_for_privilege_mentions_privilege() {
+    // A wrapper's payload leads the intent (`sudo ls` is a listing, run as
+    // root), so the elevation shows up as the risk factor rather than as
+    // the intent -- see `rules::wrappers`.
     let a = score_first("sudo ls", None);
+    let reason = scorer::generate_reason(&a);
+    assert!(
+        reason.contains("privilege escalation"),
+        "reason: {}",
+        reason
+    );
+
+    // A command whose own intent is privilege still reads as one.
+    let a = score_first("chmod 777 /etc/passwd", None);
     let reason = scorer::generate_reason(&a);
     assert!(reason.contains("Privilege"), "reason: {}", reason);
 }
