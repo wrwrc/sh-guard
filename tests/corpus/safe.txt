@@ -174,3 +174,13 @@ fd -e rs -x echo | safe | 0-20
 fd --exec-batch echo -- -x | safe | 0-20
 find . -exec ls -la {} + | safe | 0-20
 find . -exec wc -l {} + | safe | 0-20
+
+# kubectl — read-only verbs
+kubectl get pods | safe | 0-20
+kubectl get pods -o name | safe | 0-20
+kubectl describe pod nginx | safe | 0-20
+kubectl logs nginx | safe | 0-20
+kubectl top nodes | safe | 0-20
+kubectl auth can-i --list | safe | 0-20
+kubectl rollout status deploy/web | safe | 0-20
+kubectl config get-contexts | safe | 0-20

@@ -102,3 +102,10 @@ find . -fprint /etc/passwd | critical | 81-100
 # find -exec -- moved here from gtfobins.txt: sh -c payload now inherits
 # sh's own Execute classification plus root-scope amplification
 find / -exec /bin/sh \; | critical | 81-100
+
+# kubectl — cluster-destroying / privilege escalation
+kubectl delete namespace prod | critical | 81-100
+kubectl -n kube-system delete pod --all | critical | 81-100
+kubectl exec pod -- rm -rf / | critical | 81-100
+kubectl run x --image=alpine --privileged | critical | 81-100
+kubectl create clusterrolebinding x --clusterrole=cluster-admin --user=me | critical | 81-100

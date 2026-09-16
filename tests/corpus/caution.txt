@@ -103,3 +103,10 @@ gh workflow run ci.yml | caution | 21-50
 
 # find — writes its output to an arbitrary file
 find . -fprintf out.txt %p | caution | 21-50
+
+# kubectl — ordinary mutations
+kubectl apply -f deploy.yaml | caution | 21-50
+kubectl edit deploy web | caution | 21-50
+kubectl label pod nginx tier=web | caution | 21-50
+kubectl exec pod -- ls /app | caution | 21-50
+kubectl port-forward pod 8080:80 | caution | 21-50

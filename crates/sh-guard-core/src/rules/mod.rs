@@ -8,6 +8,7 @@ pub mod gh;
 pub mod git;
 pub mod gtfobins;
 pub mod injection;
+pub mod kubectl;
 pub mod network;
 pub mod paths;
 pub mod zsh;
@@ -41,7 +42,7 @@ pub fn lookup_command(name: &str) -> Option<&'static CommandRule> {
 }
 
 /// Result of one of the subcommand-aware classifiers (`git`, `gh`,
-/// `find_fd`). All three share this shape; this common type lets
+/// `find_fd`, `kubectl`). They all share this shape; this common type lets
 /// `classify_special` dispatch to whichever applies without `analyzer.rs`
 /// needing a separate `if let` chain (and a separate intent/reversibility/
 /// flags assembly step) per tool.
@@ -63,6 +64,16 @@ impl From<git::GitClassification> for SpecialClassification {
 
 impl From<gh::GhClassification> for SpecialClassification {
     fn from(c: gh::GhClassification) -> Self {
+        SpecialClassification {
+            intent: c.intent,
+            reversibility: c.reversibility,
+            flags: c.flags,
+        }
+    }
+}
+
+impl From<kubectl::KubectlClassification> for SpecialClassification {
+    fn from(c: kubectl::KubectlClassification) -> Self {
         SpecialClassification {
             intent: c.intent,
             reversibility: c.reversibility,
@@ -96,6 +107,7 @@ pub fn classify_special(
         Some("gh") => Some(gh::classify(args, env_assignments).into()),
         Some("find") => Some(find_fd::classify_find(args).into()),
         Some("fd") | Some("fdfind") => Some(find_fd::classify_fd(args).into()),
+        Some("kubectl") => Some(kubectl::classify(args, env_assignments).into()),
         _ => None,
     }
 }

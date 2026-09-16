@@ -54,7 +54,7 @@ impl FindFdClassification {
 
 use cli_args::flag;
 
-fn worse(a: Reversibility, b: Reversibility) -> Reversibility {
+pub(crate) fn worse(a: Reversibility, b: Reversibility) -> Reversibility {
     use Reversibility::*;
     match (a, b) {
         (Irreversible, _) | (_, Irreversible) => Irreversible,
@@ -63,7 +63,7 @@ fn worse(a: Reversibility, b: Reversibility) -> Reversibility {
     }
 }
 
-fn strip_quotes(s: &str) -> String {
+pub(crate) fn strip_quotes(s: &str) -> String {
     s.trim_matches(['\'', '"']).to_string()
 }
 
@@ -78,7 +78,7 @@ fn strip_quotes(s: &str) -> String {
 /// the payload tokens and how many tokens of `rest` were consumed
 /// (including the terminator, if any), so the caller can resume scanning
 /// find's own primaries after a `+`/`;`-terminated `-exec` clause.
-fn extract_payload(rest: &[String]) -> (Vec<String>, usize) {
+pub(crate) fn extract_payload(rest: &[String]) -> (Vec<String>, usize) {
     for (idx, tok) in rest.iter().enumerate() {
         if matches!(tok.as_str(), "+" | ";" | "\\;") {
             return (rest[..idx].to_vec(), idx + 1);
@@ -87,10 +87,14 @@ fn extract_payload(rest: &[String]) -> (Vec<String>, usize) {
     (rest.to_vec(), rest.len())
 }
 
-struct PayloadResult {
-    intent: Vec<Intent>,
-    reversibility: Reversibility,
-    flags: Vec<FlagAnalysis>,
+/// The result of classifying a payload command's argv -- shared with
+/// `rules::kubectl`, which reuses this payload machinery for `kubectl exec
+/// ... -- <cmd>` / `run ... -- <cmd>` / `debug ... -- <cmd>` rather than
+/// duplicating it.
+pub(crate) struct PayloadResult {
+    pub(crate) intent: Vec<Intent>,
+    pub(crate) reversibility: Reversibility,
+    pub(crate) flags: Vec<FlagAnalysis>,
 }
 
 /// Classify a payload command's argv (e.g. `["rm", "-rf", "{}"]`) using the
@@ -105,7 +109,7 @@ struct PayloadResult {
 /// An unknown payload command defaults to `Intent::Execute` /
 /// `HardToReverse`, mirroring `analyzer::analyze_segment`'s conservative
 /// default for an unrecognized top-level executable.
-fn classify_payload(tokens: &[String]) -> PayloadResult {
+pub(crate) fn classify_payload(tokens: &[String]) -> PayloadResult {
     let Some(head_raw) = tokens.first() else {
         return PayloadResult {
             intent: vec![Intent::Execute],
