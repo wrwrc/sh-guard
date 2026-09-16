@@ -17,7 +17,7 @@ rm -rf ./build | critical | 81-100
 rm -rf /tmp/build | critical | 81-100
 
 # Danger — env prefix to bypass
-env rm -rf ~/ | danger | 51-80
+env rm -rf ~/ | critical | 81-100
 builtin echo hello | danger | 51-80
 
 # Critical — pipe to execution

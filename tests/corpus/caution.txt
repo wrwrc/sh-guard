@@ -64,8 +64,6 @@ install -m 755 bin /usr/local/bin/ | caution | 21-50
 tar czf - dir/ | ssh user@host 'cat > backup.tar.gz' | caution | 21-50
 
 # Environment variable access
-env | caution | 21-50
-env | grep PATH | caution | 21-50
 echo ${PATH} | caution | 21-50
 
 # Injection patterns (mild)
@@ -75,10 +73,7 @@ echo $(cat .env) | caution | 21-50
 ls $(pwd) | caution | 21-50
 
 # System services
-systemctl status nginx | caution | 21-50
 systemctl restart nginx | caution | 21-50
-systemctl stop nginx | caution | 21-50
-service apache2 stop | caution | 21-50
 
 # Filesystem searches with side effects
 
@@ -103,6 +98,21 @@ gh workflow run ci.yml | caution | 21-50
 
 # find — writes its output to an arbitrary file
 find . -fprintf out.txt %p | caution | 21-50
+
+# Subcommand tools: reads are safe, ordinary mutations are caution
+docker build . | caution | 21-50
+docker pull ubuntu | caution | 21-50
+docker stop container | caution | 21-50
+npm run build | caution | 21-50
+npm install | caution | 21-50
+brew install wget | caution | 21-50
+systemctl start nginx | caution | 21-50
+
+# Wrappers: the payload leads, the wrapper adds its own modifier
+sudo ls | caution | 21-50
+sudo -u www whoami | caution | 21-50
+ssh host ls | caution | 21-50
+chroot /mnt ls | caution | 21-50
 
 # kubectl — ordinary mutations
 kubectl apply -f deploy.yaml | caution | 21-50

@@ -110,6 +110,18 @@ kubectl exec pod -- rm -rf / | critical | 81-100
 kubectl run x --image=alpine --privileged | critical | 81-100
 kubectl create clusterrolebinding x --clusterrole=cluster-admin --user=me | critical | 81-100
 
+# Subcommand tools: cluster/host-destroying verbs
+docker system prune -af | critical | 81-100
+systemctl reboot | critical | 81-100
+
+# Wrappers inherit a destructive payload (env/nohup/timeout/sudo/ssh ...)
+env rm -rf ~/ | critical | 81-100
+nohup rm -rf / | critical | 81-100
+timeout 5 rm -rf / | critical | 81-100
+sudo rm -rf / | critical | 81-100
+ssh host 'rm -rf /' | critical | 81-100
+watch rm -rf / | critical | 81-100
+
 # xargs — payload-led: the payload's own risk drives the score
 xargs rm | critical | 81-100
 xargs rm -rf | critical | 81-100

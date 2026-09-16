@@ -11,6 +11,8 @@ pub mod injection;
 pub mod kubectl;
 pub mod network;
 pub mod paths;
+pub mod subcommands;
+pub mod wrappers;
 pub mod xargs;
 pub mod zsh;
 
@@ -83,6 +85,26 @@ impl From<kubectl::KubectlClassification> for SpecialClassification {
     }
 }
 
+impl From<subcommands::SubcommandClassification> for SpecialClassification {
+    fn from(c: subcommands::SubcommandClassification) -> Self {
+        SpecialClassification {
+            intent: c.intent,
+            reversibility: c.reversibility,
+            flags: c.flags,
+        }
+    }
+}
+
+impl From<wrappers::WrapperClassification> for SpecialClassification {
+    fn from(c: wrappers::WrapperClassification) -> Self {
+        SpecialClassification {
+            intent: c.intent,
+            reversibility: c.reversibility,
+            flags: c.flags,
+        }
+    }
+}
+
 impl From<xargs::XargsClassification> for SpecialClassification {
     fn from(c: xargs::XargsClassification) -> Self {
         SpecialClassification {
@@ -120,6 +142,10 @@ pub fn classify_special(
         Some("fd") | Some("fdfind") => Some(find_fd::classify_fd(args).into()),
         Some("kubectl") => Some(kubectl::classify(args, env_assignments).into()),
         Some("xargs") => Some(xargs::classify(args).into()),
+        Some(name) if subcommands::is_subcommand_tool(name) => {
+            subcommands::classify(name, args).map(Into::into)
+        }
+        Some(name) if wrappers::is_wrapper(name) => wrappers::classify(name, args).map(Into::into),
         _ => None,
     }
 }
