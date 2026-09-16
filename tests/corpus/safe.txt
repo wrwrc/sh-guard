@@ -184,3 +184,9 @@ kubectl top nodes | safe | 0-20
 kubectl auth can-i --list | safe | 0-20
 kubectl rollout status deploy/web | safe | 0-20
 kubectl config get-contexts | safe | 0-20
+
+# xargs with a read-only payload (was flat DANGER before payload analysis)
+xargs echo | safe | 0-20
+xargs ls | safe | 0-20
+find . -print0 | xargs -0 ls -la | safe | 0-20
+find . -type f | xargs grep TODO | safe | 0-20

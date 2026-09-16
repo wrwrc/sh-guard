@@ -1548,20 +1548,7 @@ pub static COMMAND_RULES: &[CommandRule] = &[
         base_weight: 50,
         reversibility: Reversibility::HardToReverse,
         capabilities: &[BinaryCapability::Shell, BinaryCapability::Command],
-        dangerous_flags: &[
-            FlagRule {
-                flags: &["delete"],
-                modifier: 25,
-                risk_factor: RiskFactor::RecursiveDelete,
-                description: "Deletes Kubernetes resources",
-            },
-            FlagRule {
-                flags: &["exec"],
-                modifier: 20,
-                risk_factor: RiskFactor::CommandExecution,
-                description: "Executes a command inside a running pod",
-            },
-        ],
+        dangerous_flags: &[],
         mitre: Some("T1609"),
     },
     // =====================================================================

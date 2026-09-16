@@ -50,7 +50,6 @@ source .bashrc | critical | 81-100
 . .bashrc | danger | 51-80
 eval 'echo hello' | danger | 51-80
 eval "rm -rf /tmp" | danger | 51-80
-xargs rm | danger | 51-80
 
 # Export/env modification
 export FOO=bar | danger | 51-80

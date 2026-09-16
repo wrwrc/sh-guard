@@ -11,6 +11,7 @@ pub mod injection;
 pub mod kubectl;
 pub mod network;
 pub mod paths;
+pub mod xargs;
 pub mod zsh;
 
 /// A rule defining the risk profile of a known command.
@@ -82,6 +83,16 @@ impl From<kubectl::KubectlClassification> for SpecialClassification {
     }
 }
 
+impl From<xargs::XargsClassification> for SpecialClassification {
+    fn from(c: xargs::XargsClassification) -> Self {
+        SpecialClassification {
+            intent: c.intent,
+            reversibility: c.reversibility,
+            flags: c.flags,
+        }
+    }
+}
+
 impl From<find_fd::FindFdClassification> for SpecialClassification {
     fn from(c: find_fd::FindFdClassification) -> Self {
         SpecialClassification {
@@ -108,6 +119,7 @@ pub fn classify_special(
         Some("find") => Some(find_fd::classify_find(args).into()),
         Some("fd") | Some("fdfind") => Some(find_fd::classify_fd(args).into()),
         Some("kubectl") => Some(kubectl::classify(args, env_assignments).into()),
+        Some("xargs") => Some(xargs::classify(args).into()),
         _ => None,
     }
 }

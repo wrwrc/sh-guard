@@ -121,20 +121,16 @@ pub(crate) fn classify_payload(tokens: &[String]) -> PayloadResult {
     let head_base = head.rsplit('/').next().unwrap_or(&head).to_string();
     let sub_args = &tokens[1..];
 
-    if head_base == "git" {
-        let g = rules::git::classify(sub_args, &[]);
+    // Route through the same dispatch `analyzer` uses, so a payload that
+    // is itself a subcommand-aware tool (git, gh, kubectl, find/fd, xargs)
+    // gets its real classification rather than its coarse `CommandRule`
+    // fallback -- `-x kubectl delete namespace prod` must inherit what
+    // `kubectl delete namespace prod` would score on its own.
+    if let Some(special) = rules::classify_special(Some(&head_base), sub_args, &[]) {
         return PayloadResult {
-            intent: g.intent,
-            reversibility: g.reversibility,
-            flags: g.flags,
-        };
-    }
-    if head_base == "gh" {
-        let g = rules::gh::classify(sub_args, &[]);
-        return PayloadResult {
-            intent: g.intent,
-            reversibility: g.reversibility,
-            flags: g.flags,
+            intent: special.intent,
+            reversibility: special.reversibility,
+            flags: special.flags,
         };
     }
 
