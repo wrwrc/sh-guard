@@ -266,7 +266,7 @@ impl RuleSet {
     }
 }
 
-fn parse_intent(s: Option<&str>) -> Intent {
+pub(crate) fn parse_intent(s: Option<&str>) -> Intent {
     match s {
         Some("read") => Intent::Read,
         Some("write") => Intent::Write,
@@ -284,7 +284,7 @@ fn parse_intent(s: Option<&str>) -> Intent {
     }
 }
 
-fn parse_reversibility(s: Option<&str>) -> Reversibility {
+pub(crate) fn parse_reversibility(s: Option<&str>) -> Reversibility {
     match s {
         Some("reversible") => Reversibility::Reversible,
         Some("hard_to_reverse") => Reversibility::HardToReverse,
