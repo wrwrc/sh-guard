@@ -57,6 +57,17 @@ pub fn is_subcommand_tool(name: &str) -> bool {
             | "pip3"
             | "gem"
             | "cargo"
+            | "go"
+            | "make"
+            | "gmake"
+            | "ninja"
+            | "chmod"
+            | "sed"
+            | "gsed"
+            | "awk"
+            | "gawk"
+            | "nawk"
+            | "mawk"
     )
 }
 
@@ -93,9 +104,13 @@ pub fn classify(name: &str, args: &[String]) -> Option<SubcommandClassification>
         "docker" | "podman" => Some(classify_docker(args)),
         "npm" | "yarn" | "pnpm" => Some(classify_npm(name, args)),
         "systemctl" | "service" => Some(classify_systemctl(name, args)),
-        "brew" | "apt" | "apt-get" | "pip" | "pip3" | "gem" | "cargo" => {
+        "brew" | "apt" | "apt-get" | "pip" | "pip3" | "gem" | "cargo" | "go" => {
             Some(classify_pkg(name, args))
         }
+        "make" | "gmake" | "ninja" => Some(classify_make(args)),
+        "chmod" => Some(classify_chmod(args)),
+        "sed" | "gsed" => Some(classify_sed(args)),
+        "awk" | "gawk" | "nawk" | "mawk" => Some(classify_awk(args)),
         _ => None,
     }
 }
@@ -467,7 +482,7 @@ fn classify_pkg(name: &str, args: &[String]) -> SubcommandClassification {
         // Reads
         "list" | "ls" | "search" | "show" | "info" | "outdated" | "deps" | "depends" | "policy"
         | "config" | "which" | "home" | "doctor" | "tree" | "licenses" | "index" | "freeze"
-        | "check" | "audit" | "verify" | "version" | "help" => read(),
+        | "check" | "audit" | "verify" | "version" | "help" | "env" => read(),
 
         // Builds run project-defined code (build.rs, setup.py, postinstall).
         "build" | "b" | "test" | "bench" | "run" | "check-all" | "doc" | "clippy" | "fmt"
@@ -535,4 +550,368 @@ fn classify_pkg(name: &str, args: &[String]) -> SubcommandClassification {
             },
         ),
     }
+}
+
+// ========================================================
+// chmod
+// ========================================================
+
+/// `chmod +x script.sh` and `chmod 644 file` are routine; world-writable
+/// or setuid/setgid modes are the privilege-relevant ones. The table entry
+/// scored every chmod as `Intent::Privilege` (weight 55), so making your
+/// own script executable was DANGER.
+fn classify_chmod(args: &[String]) -> SubcommandClassification {
+    let recursive = args.iter().any(|a| {
+        a == "-R"
+            || a == "--recursive"
+            || (a.starts_with('-') && !a.starts_with("--") && a.contains('R'))
+    });
+    let mode = args
+        .iter()
+        .map(|a| a.trim_matches(['\'', '"']))
+        .find(|a| {
+            !a.starts_with('-') || a.starts_with("-w") || a.starts_with("-x") || a.starts_with("-r")
+        })
+        .unwrap_or("");
+
+    let (setid, world_writable) = chmod_mode_risk(mode);
+    // Any mode change on a system file is a privileged operation: `chmod 000
+    // /etc/passwd` locks every user out, whatever the bits.
+    let system_target = args.iter().any(|a| {
+        let a = a.trim_matches(['\'', '"']);
+        [
+            "/etc",
+            "/usr",
+            "/bin",
+            "/sbin",
+            "/lib",
+            "/boot",
+            "/System",
+            "/private/etc",
+            "/var/root",
+        ]
+        .iter()
+        .any(|d| a == *d || a.starts_with(&format!("{d}/")))
+    });
+
+    let mut r = if setid || world_writable || system_target {
+        SubcommandClassification::new(Intent::Privilege, Reversibility::HardToReverse)
+    } else {
+        SubcommandClassification::new(Intent::Write, Reversibility::Reversible)
+    };
+    if setid {
+        r = r.with(flag(
+            30,
+            RiskFactor::PrivilegeEscalation,
+            "chmod +s",
+            "Sets the setuid/setgid bit, letting the file run with its owner's privileges",
+        ));
+    }
+    if world_writable {
+        r = r.with(flag(
+            20,
+            RiskFactor::PrivilegeEscalation,
+            "chmod 777 / o+w",
+            "Makes the file writable by every user",
+        ));
+    }
+    if system_target && !setid && !world_writable {
+        r = r.with(flag(
+            15,
+            RiskFactor::PrivilegeEscalation,
+            "chmod <system path>",
+            "Changes permissions on a system file",
+        ));
+    }
+    if recursive {
+        r = r.with(flag(
+            10,
+            RiskFactor::BroadScope,
+            "chmod -R",
+            "Applies the mode to a whole directory tree",
+        ));
+    }
+    r
+}
+
+/// (sets setuid/setgid, grants write to "other") for an octal or symbolic mode.
+fn chmod_mode_risk(mode: &str) -> (bool, bool) {
+    if !mode.is_empty() && mode.chars().all(|c| c.is_ascii_digit()) {
+        let digits: Vec<u32> = mode.chars().filter_map(|c| c.to_digit(8)).collect();
+        let (special, other) = match digits.len() {
+            4 => (digits[0], digits[3]),
+            3 => (0, digits[2]),
+            _ => (0, 0),
+        };
+        return (special & 0b110 != 0, other & 0b010 != 0);
+    }
+    let mut setid = false;
+    let mut world_writable = false;
+    for clause in mode.split(',') {
+        let op_pos = clause.find(['+', '=', '-']);
+        let Some(op_pos) = op_pos else { continue };
+        let who = &clause[..op_pos];
+        let op = &clause[op_pos..op_pos + 1];
+        let perms = &clause[op_pos + 1..];
+        if op == "-" {
+            continue;
+        }
+        if perms.contains('s') {
+            setid = true;
+        }
+        let applies_to_other = who.is_empty() || who.contains('o') || who.contains('a');
+        if perms.contains('w') && applies_to_other {
+            world_writable = true;
+        }
+    }
+    (setid, world_writable)
+}
+
+// ========================================================
+// sed / awk
+// ========================================================
+
+/// `sed` only writes files with `-i` (in place) or a `w` command, and only
+/// runs commands with GNU sed's `e`. `sed -n '1,5p' file` is a read.
+fn classify_sed(args: &[String]) -> SubcommandClassification {
+    let in_place = args.iter().any(|a| {
+        a == "-i" || a.starts_with("-i") && !a.starts_with("--") || a.starts_with("--in-place")
+    });
+    let scripts: Vec<String> = sed_scripts(args);
+    let executes = scripts.iter().any(|sc| sed_script_executes(sc));
+    let writes_file = scripts.iter().any(|sc| sed_script_writes(sc));
+
+    if executes {
+        return SubcommandClassification::new(Intent::Execute, Reversibility::HardToReverse).with(
+            flag(
+                20,
+                RiskFactor::CommandExecution,
+                "sed e",
+                "GNU sed's `e` command runs its pattern space as a shell command",
+            ),
+        );
+    }
+    if in_place || writes_file {
+        return SubcommandClassification::new(Intent::Write, Reversibility::HardToReverse).with(
+            flag(10, RiskFactor::Write, "sed -i", "Edits the file in place"),
+        );
+    }
+    SubcommandClassification::new(Intent::Read, Reversibility::Reversible)
+}
+
+fn sed_scripts(args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let mut saw_explicit = false;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "-e" || a == "--expression" {
+            if let Some(v) = args.get(i + 1) {
+                out.push(v.trim_matches(['\'', '"']).to_string());
+            }
+            saw_explicit = true;
+            i += 2;
+            continue;
+        }
+        if let Some(v) = a.strip_prefix("--expression=") {
+            out.push(v.trim_matches(['\'', '"']).to_string());
+            saw_explicit = true;
+        }
+        i += 1;
+    }
+    if !saw_explicit {
+        if let Some(first) = args.iter().find(|a| !a.starts_with('-')) {
+            out.push(first.trim_matches(['\'', '"']).to_string());
+        }
+    }
+    out
+}
+
+fn sed_script_executes(script: &str) -> bool {
+    // `s/a/b/e` (substitution flag) or a bare `e [command]` command.
+    script.split([';', '\n']).any(|cmd| {
+        let cmd = cmd.trim();
+        let substitution_e = cmd.starts_with('s') && cmd.len() > 1 && {
+            let delim = cmd.chars().nth(1).unwrap();
+            let parts: Vec<&str> = cmd[2..].split(delim).collect();
+            parts.len() >= 3 && parts[2].contains('e')
+        };
+        substitution_e || cmd == "e" || cmd.starts_with("e ")
+    })
+}
+
+fn sed_script_writes(script: &str) -> bool {
+    script.split([';', '\n']).any(|cmd| {
+        let cmd = cmd.trim();
+        cmd.starts_with("w ") || cmd.starts_with("W ")
+    })
+}
+
+/// `awk` is a read unless the program runs commands (`system()`, piping to
+/// or from a command) or writes files (`print > "file"`, `-i inplace`).
+fn classify_awk(args: &[String]) -> SubcommandClassification {
+    let in_place = args.windows(2).any(|w| {
+        (w[0] == "-i" || w[0] == "--include") && w[1].trim_matches(['\'', '"']) == "inplace"
+    });
+    let program = awk_program(args);
+
+    let executes = program.contains("system(")
+        || program.contains("| getline")
+        || program.contains("|getline")
+        || awk_prints_to_pipe(&program);
+    if executes {
+        return SubcommandClassification::new(Intent::Execute, Reversibility::HardToReverse).with(
+            flag(
+                20,
+                RiskFactor::CommandExecution,
+                "awk system()",
+                "The awk program runs shell commands",
+            ),
+        );
+    }
+    if in_place || awk_redirects_output(&program) {
+        return SubcommandClassification::new(Intent::Write, Reversibility::HardToReverse);
+    }
+    SubcommandClassification::new(Intent::Read, Reversibility::Reversible)
+}
+
+fn awk_program(args: &[String]) -> String {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if matches!(a, "-f" | "--file") {
+            // Program in a file we can't see: stay conservative.
+            return "system(".to_string();
+        }
+        if matches!(
+            a,
+            "-F" | "-v" | "--assign" | "--field-separator" | "-i" | "--include"
+        ) {
+            i += 2;
+            continue;
+        }
+        if a.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        return a.trim_matches(['\'', '"']).to_string();
+    }
+    String::new()
+}
+
+fn awk_prints_to_pipe(program: &str) -> bool {
+    // `print ... | "cmd"` -- a pipe followed by a string.
+    program
+        .match_indices('|')
+        .any(|(i, _)| program[i + 1..].trim_start().starts_with('"'))
+}
+
+fn awk_redirects_output(program: &str) -> bool {
+    // `print ... > "file"` / `>> "file"` -- a comparison `>` is followed by
+    // a number or identifier, not a string.
+    program.match_indices('>').any(|(i, _)| {
+        program[i + 1..]
+            .trim_start_matches('>')
+            .trim_start()
+            .starts_with('"')
+    })
+}
+
+// ========================================================
+// make / ninja
+// ========================================================
+
+/// Building a project runs its build recipes -- code, but the project's own,
+/// producing artifacts that a clean rebuild regenerates. That makes a plain
+/// build an ordinary mutation (CAUTION), not unknown-binary code execution.
+/// `install` targets write outside the project and `clean`-style targets
+/// delete, so those are priced up; `sudo make install` adds elevation on
+/// top via the wrapper.
+fn classify_make(args: &[String]) -> SubcommandClassification {
+    let mut targets = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        // Options that take a separate value (make and ninja).
+        if matches!(
+            a,
+            "-f" | "--file"
+                | "--makefile"
+                | "-C"
+                | "--directory"
+                | "-j"
+                | "--jobs"
+                | "-l"
+                | "--load-average"
+                | "-I"
+                | "--include-dir"
+                | "-o"
+                | "--old-file"
+                | "-W"
+                | "--what-if"
+        ) {
+            // `-j` may appear without a value; only skip a following number.
+            if matches!(a, "-j" | "--jobs" | "-l" | "--load-average") {
+                if args
+                    .get(i + 1)
+                    .is_some_and(|v| v.chars().all(|c| c.is_ascii_digit() || c == '.'))
+                {
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        if a.starts_with('-') || a.contains('=') {
+            i += 1;
+            continue;
+        }
+        targets.push(a);
+        i += 1;
+    }
+
+    let installs = targets
+        .iter()
+        .any(|t| t.starts_with("install") || *t == "deploy" || *t == "release" || *t == "publish");
+    let cleans = targets.iter().any(|t| {
+        matches!(
+            *t,
+            "clean" | "distclean" | "mrproper" | "realclean" | "uninstall" | "purge"
+        )
+    });
+
+    let mut r = SubcommandClassification::new(
+        Intent::Write,
+        if installs {
+            Reversibility::HardToReverse
+        } else {
+            Reversibility::Reversible
+        },
+    )
+    .with(flag(
+        5,
+        RiskFactor::CommandExecution,
+        "make",
+        "Runs the project's build recipes",
+    ));
+    if installs {
+        r = r.with(flag(
+            10,
+            RiskFactor::EscapesProjectBoundary,
+            "make install/deploy",
+            "Installs or publishes build output outside the project",
+        ));
+    }
+    if cleans {
+        r.intent = vec![Intent::Delete];
+        r = r.with(flag(
+            5,
+            RiskFactor::RecursiveDelete,
+            "make clean",
+            "Deletes build output",
+        ));
+    }
+    r
 }

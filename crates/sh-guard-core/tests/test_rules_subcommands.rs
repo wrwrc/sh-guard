@@ -237,3 +237,88 @@ fn wrapped_and_piped_forms_still_work() {
     // A read piped into a read stays safe.
     assert_eq!(analyze("docker ps | grep running").level, RiskLevel::Safe);
 }
+
+// ========================================================================
+// chmod / sed / awk
+// ========================================================================
+
+#[test]
+fn chmod_is_classified_by_mode_and_target() {
+    for cmd in [
+        "chmod +x ./script.sh",
+        "chmod 644 f",
+        "chmod -R 755 dir",
+        "chmod u+x f",
+    ] {
+        let result = analyze(cmd);
+        assert_eq!(result.level, RiskLevel::Caution, "{cmd}: {}", result.score);
+        assert!(
+            !has_risk_factor(first_sub(&result), RiskFactor::PrivilegeEscalation),
+            "{cmd}"
+        );
+    }
+    for cmd in [
+        "chmod 777 f",
+        "chmod o+w f",
+        "chmod a+w f",
+        "chmod 4755 f",
+        "chmod u+s f",
+        "chmod g+s f",
+        "chmod 000 /etc/passwd",
+    ] {
+        let result = analyze(cmd);
+        assert!(
+            has_risk_factor(first_sub(&result), RiskFactor::PrivilegeEscalation),
+            "{cmd}: {:?}",
+            first_sub(&result).risk_factors
+        );
+        assert!(
+            matches!(result.level, RiskLevel::Danger | RiskLevel::Critical),
+            "{cmd}"
+        );
+    }
+}
+
+#[test]
+fn sed_is_a_read_unless_it_edits_or_executes() {
+    for cmd in ["sed -n '1,5p' f", "sed 's/a/b/g' f", "sed -e 's/a/b/' f"] {
+        assert_eq!(analyze(cmd).level, RiskLevel::Safe, "{cmd}");
+    }
+    for cmd in [
+        "sed -i 's/a/b/' f",
+        "sed -i.bak 's/a/b/' f",
+        "sed --in-place 's/a/b/' f",
+    ] {
+        assert!(
+            first_sub(&analyze(cmd)).intent.contains(&Intent::Write),
+            "{cmd}"
+        );
+    }
+    let executes = analyze("sed 's/x/id/e' f");
+    assert!(first_sub(&executes).intent.contains(&Intent::Execute));
+}
+
+#[test]
+fn awk_is_a_read_unless_it_runs_commands_or_writes() {
+    for cmd in [
+        "awk '{print $1}' f",
+        "awk '$1 > 5' f",
+        "awk -F, '{print $2}' f",
+    ] {
+        assert_eq!(analyze(cmd).level, RiskLevel::Safe, "{cmd}");
+    }
+    for cmd in [
+        "awk '{system(\"id\")}' f",
+        "awk '{print | \"sh\"}' f",
+        "awk '{\"date\" | getline d}' f",
+        "awk -f prog.awk f",
+    ] {
+        assert!(
+            first_sub(&analyze(cmd)).intent.contains(&Intent::Execute),
+            "{cmd}"
+        );
+    }
+    assert!(first_sub(&analyze("awk '{print > \"out\"}' f"))
+        .intent
+        .contains(&Intent::Write));
+}

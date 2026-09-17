@@ -17,13 +17,27 @@ pub fn score_command(analysis: &mut CommandAnalysis, ctx: Option<&ClassifyContex
         .max()
         .unwrap_or(0);
 
-    // Best (highest) target scope and sensitivity
-    let scope_modifier: i16 = analysis
-        .targets
+    // Best (highest) target scope and sensitivity.
+    //
+    // Scope measures how far a command reaches -- `rm -rf /` versus
+    // `rm -rf ./build`. Listing or searching a tree (`ls /`,
+    // `find / -name x`, `fd x /opt`) changes nothing and reads no file
+    // contents, so scope doesn't apply to it; reading or modifying a file
+    // under a system path (`cat /etc/shadow`, `cp x /etc/`) still counts.
+    let names_only = analysis
+        .intent
         .iter()
-        .map(|t| t.scope.modifier())
-        .max()
-        .unwrap_or(0);
+        .all(|i| matches!(i, Intent::Info | Intent::Search));
+    let scope_modifier: i16 = if names_only {
+        0
+    } else {
+        analysis
+            .targets
+            .iter()
+            .map(|t| t.scope.modifier())
+            .max()
+            .unwrap_or(0)
+    };
 
     let sensitivity_modifier: i16 = analysis
         .targets
@@ -52,7 +66,7 @@ pub fn score_command(analysis: &mut CommandAnalysis, ctx: Option<&ClassifyContex
         .unwrap_or_else(|| if ctx.is_some() { 0 } else { 5 }); // No context = +5
 
     // Injection pattern score bonus
-    let injection_score: i16 = injection::detect_injections(&analysis.command, &analysis.command)
+    let injection_score: i16 = injection::detect_injections_in(&analysis.command)
         .iter()
         .map(|(_, score, _, _)| *score as i16)
         .max()

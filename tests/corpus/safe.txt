@@ -207,3 +207,25 @@ xargs echo | safe | 0-20
 xargs ls | safe | 0-20
 find . -print0 | xargs -0 ls -la | safe | 0-20
 find . -type f | xargs grep TODO | safe | 0-20
+
+# Re-leveled once compound statements, substitutions and `-c` scripts
+# are parsed and quoted text is no longer scanned as shell syntax
+print -P '%F{red}hello%f' | safe | 0-20
+builtin cd /tmp | safe | 0-20
+builtin echo hello | safe | 0-20
+echo $(whoami) | safe | 0-20
+echo `date` | safe | 0-20
+ls $(pwd) | safe | 0-20
+echo ${PATH} | safe | 0-20
+VAR=hello; echo $VAR | safe | 0-20
+bash -c 'echo hello' | safe | 0-20
+sh -c 'echo hello' | safe | 0-20
+
+# chmod/sed/awk: classified by mode and program, not as blanket writes
+sed 's/old/new/g' file.txt | safe | 0-20
+
+# Listing or searching a broad tree changes nothing and reads no contents
+ls / | safe | 0-20
+find / -maxdepth 6 -iname product-context -type d | safe | 0-20
+fd -t f pattern /opt | safe | 0-20
+grep -rl TODO /usr/local/include | safe | 0-20

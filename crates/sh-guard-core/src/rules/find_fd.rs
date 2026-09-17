@@ -121,6 +121,22 @@ pub(crate) fn classify_payload(tokens: &[String]) -> PayloadResult {
     let head_base = head.rsplit('/').next().unwrap_or(&head).to_string();
     let sub_args = &tokens[1..];
 
+    // `env bash --version`, `xargs php -l`: the payload only describes
+    // itself or syntax-checks a file, exactly as at the top level.
+    let probe_eligible = rules::lookup_command(&head_base)
+        .is_none_or(|r| r.intent == Intent::Execute)
+        && rules::classify_special(Some(&head_base), &[], &[]).is_none();
+    if probe_eligible
+        && (crate::analyzer::is_info_probe(sub_args)
+            || crate::analyzer::is_syntax_check(Some(&head_base), sub_args))
+    {
+        return PayloadResult {
+            intent: vec![Intent::Info],
+            reversibility: Reversibility::Reversible,
+            flags: vec![],
+        };
+    }
+
     // Route through the same dispatch `analyzer` uses, so a payload that
     // is itself a subcommand-aware tool (git, gh, kubectl, find/fd, xargs)
     // gets its real classification rather than its coarse `CommandRule`

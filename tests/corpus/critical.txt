@@ -126,3 +126,9 @@ watch rm -rf / | critical | 81-100
 xargs rm | critical | 81-100
 xargs rm -rf | critical | 81-100
 xargs git push --force | critical | 81-100
+
+# Re-leveled once compound statements, substitutions and `-c` scripts
+# are parsed and quoted text is no longer scanned as shell syntax
+emulate sh -c 'rm -rf /' | critical | 81-100
+eval "rm -rf /tmp" | critical | 81-100
+echo $(rm -rf /) | critical | 81-100

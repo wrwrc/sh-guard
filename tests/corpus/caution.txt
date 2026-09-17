@@ -10,7 +10,7 @@ tar xzf archive.tar.gz | caution | 21-50
 zip archive.zip file.txt | caution | 21-50
 unzip archive.zip | caution | 21-50
 tee output.txt | caution | 21-50
-sed 's/old/new/g' file.txt | caution | 21-50
+
 
 # Git operations
 git add . | caution | 21-50
@@ -64,13 +64,9 @@ install -m 755 bin /usr/local/bin/ | caution | 21-50
 tar czf - dir/ | ssh user@host 'cat > backup.tar.gz' | caution | 21-50
 
 # Environment variable access
-echo ${PATH} | caution | 21-50
 
 # Injection patterns (mild)
-echo $(whoami) | caution | 21-50
-echo `date` | caution | 21-50
 echo $(cat .env) | caution | 21-50
-ls $(pwd) | caution | 21-50
 
 # System services
 systemctl restart nginx | caution | 21-50
@@ -120,3 +116,21 @@ kubectl edit deploy web | caution | 21-50
 kubectl label pod nginx tier=web | caution | 21-50
 kubectl exec pod -- ls /app | caution | 21-50
 kubectl port-forward pod 8080:80 | caution | 21-50
+
+# Re-leveled once compound statements, substitutions and `-c` scripts
+# are parsed and quoted text is no longer scanned as shell syntax
+typeset -A assoc_array | caution | 21-50
+eval 'echo hello' | caution | 21-50
+export FOO=bar | caution | 21-50
+FOO=$(cat /etc/passwd) | caution | 21-50
+
+# chmod/sed/awk: classified by mode and program, not as blanket writes
+chmod 755 script.sh | caution | 21-50
+chmod 644 file.txt | caution | 21-50
+chmod +x script.sh | caution | 21-50
+
+# Builds run the project's own recipes: an ordinary mutation
+make | caution | 21-50
+make -f Makefile.cbm cbm | caution | 21-50
+make clean | caution | 21-50
+ninja -C build | caution | 21-50
