@@ -179,8 +179,13 @@ fn classify_sink(analysis: &CommandAnalysis) -> Option<TaintSinkPattern> {
         .as_deref()
         .map(|e| e.rsplit('/').next().unwrap_or(e));
 
-    // Execution sinks: sh, bash, eval, python, etc.
-    if analysis.intent.contains(&Intent::Execute) {
+    // Execution sinks: something that *executes what it reads* -- a shell
+    // or interpreter, or a wrapper (xargs, sudo, env, ...) whose payload is
+    // one. An unrecognized program is still classified Execute on its own
+    // (running an unknown binary is risky), but piping data into it is not
+    // "piping data to shell execution": `echo '{...}' | ./my-tool` feeds
+    // the tool input, it doesn't run that input as code.
+    if analysis.intent.contains(&Intent::Execute) && is_execution_sink(exec_base, analysis) {
         return Some(TaintSinkPattern::Execution);
     }
 
@@ -259,4 +264,77 @@ fn determine_flow_type(operators: &[ChainOperator]) -> FlowType {
     } else {
         FlowType::Sequence
     }
+}
+
+/// Shells and interpreters that execute the program text they are given on
+/// stdin (or via `-c`).
+const INTERPRETERS: &[&str] = &[
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "ksh",
+    "mksh",
+    "fish",
+    "csh",
+    "tcsh",
+    "ash",
+    "busybox",
+    "eval",
+    "exec",
+    "source",
+    ".",
+    "python",
+    "python2",
+    "python3",
+    "node",
+    "nodejs",
+    "deno",
+    "bun",
+    "ruby",
+    "perl",
+    "php",
+    "lua",
+    "luajit",
+    "tclsh",
+    "wish",
+    "osascript",
+    "pwsh",
+    "powershell",
+    "awk",
+    "gawk",
+    "nawk",
+    "mawk",
+    "sqlite3",
+    "psql",
+    "mysql",
+    "R",
+    "Rscript",
+    "julia",
+    "irb",
+    "jshell",
+    "groovy",
+    "scala",
+];
+
+fn is_execution_sink(exec_base: Option<&str>, analysis: &CommandAnalysis) -> bool {
+    let Some(name) = exec_base else {
+        return true;
+    };
+    if INTERPRETERS.contains(&name) {
+        return true;
+    }
+    // A wrapper or payload-running tool whose classification says it runs a
+    // shell: its flags carry the payload's CommandExecution / UntrustedExecution.
+    if crate::rules::classify_special(Some(name), &[], &[]).is_some()
+        || crate::rules::lookup_command(name).is_some()
+    {
+        return true;
+    }
+    // Unknown binary: only a sink if something about it says it executes
+    // code (e.g. a flag analysis already recorded execution).
+    analysis
+        .flags
+        .iter()
+        .any(|f| matches!(f.risk_factor, RiskFactor::UntrustedExecution))
 }

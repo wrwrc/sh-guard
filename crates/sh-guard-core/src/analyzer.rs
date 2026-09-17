@@ -41,9 +41,32 @@ fn analyze_segment(
         .collect();
     let special = rules::classify_special(exec_base, &arg_values, &env_assignments);
 
+    // A bare `NAME=value` statement runs nothing. (Risky names such as
+    // PATH / LD_PRELOAD are caught by the injection patterns on the raw
+    // text; a `$(...)` in the value is analyzed as its own segment.)
+    let assignment_only =
+        executable.is_none() && !segment.assignments.is_empty() && segment.args.is_empty();
+    // `<anything> --version` / `<anything> [subcommand...] --help` only
+    // prints -- no matter how unfamiliar the binary is.
+    // Also for interpreters with a rule of their own (`bash --version`,
+    // `php -l file.php`, `node --check app.js`): describing themselves or
+    // syntax-checking a file runs no program code.
+    let info_probe = special.is_none()
+        && cmd_rule.is_none_or(|r| r.intent == Intent::Execute)
+        && (is_info_probe(&arg_values) || is_syntax_check(exec_base, &arg_values));
+    // `bash -c '<script>'` / `eval '<script>'`: the parser analyzes the
+    // script's commands as segments of their own, so scoring the launcher
+    // as Execute on top would make `bash -c 'ls'` DANGER regardless of
+    // what the script does.
+    let inline_script_launcher = parser_runs_inline_script(segment);
+
     // 2. Determine intent
-    let intent = if let Some(special) = &special {
+    let intent = if inline_script_launcher {
+        vec![Intent::Info]
+    } else if let Some(special) = &special {
         special.intent.clone()
+    } else if assignment_only || info_probe {
+        vec![Intent::Info]
     } else if let Some(rule) = cmd_rule {
         vec![rule.intent]
     } else {
@@ -52,8 +75,12 @@ fn analyze_segment(
     };
 
     // 3. Determine reversibility
-    let reversibility = if let Some(special) = &special {
+    let reversibility = if inline_script_launcher {
+        Reversibility::Reversible
+    } else if let Some(special) = &special {
         special.reversibility
+    } else if assignment_only || info_probe {
+        Reversibility::Reversible
     } else {
         cmd_rule
             .map(|r| r.reversibility)
@@ -82,6 +109,16 @@ fn analyze_segment(
         }
     }
 
+    if inline_script_launcher {
+        flags.clear();
+        flags.push(FlagAnalysis {
+            flag: "-c <script>".to_string(),
+            modifier: 10,
+            risk_factor: RiskFactor::CommandExecution,
+            description: "Runs an inline script (its commands are analyzed separately)".to_string(),
+        });
+    }
+
     // 6. Determine targets (from args that look like paths)
     let targets = extract_targets(segment, ctx, exec_base);
 
@@ -96,15 +133,11 @@ fn analyze_segment(
         }
     }
 
-    // Check injection patterns on the raw command text.
-    // NOTE: We pass `raw` as both `unquoted` and `raw` because we do not yet
-    // have a quote-stripping function.  This means patterns that inspect
-    // `unquoted` may trigger on text that is actually inside quotes (false
-    // positives).  This is the safer direction — false positives rather than
-    // false negatives — so a properly quoted string may still be flagged.
-    // TODO: Implement a quote-stripping pass and pass the truly unquoted text
-    // as the first argument.
-    let injections = injection::detect_injections(&segment.raw, &segment.raw);
+    // Check injection patterns. Patterns about shell syntax only look at the
+    // text the shell actually interprets (see `injection::shell_active_text`),
+    // so `awk '{print $1}'`, a JSON argument, or a quoted heredoc body is
+    // not mistaken for substitution or expansion.
+    let injections = injection::detect_injections_in(&segment.raw);
     for (_, _, rf, _) in &injections {
         if !risk_factors.contains(rf) {
             risk_factors.push(*rf);
@@ -145,6 +178,42 @@ fn analyze_segment(
         risk_factors,
         reversibility,
         capabilities,
+    }
+}
+
+fn parser_runs_inline_script(segment: &CommandSegment) -> bool {
+    crate::parser::runs_inline_script(segment)
+}
+
+/// `php -l`, `bash -n`/`sh -n`/`zsh -n`, `node --check`/`-c`, `ruby -c`:
+/// parse a file and report syntax errors without running it. (`perl -c`
+/// is deliberately absent -- it still runs BEGIN blocks.)
+pub(crate) fn is_syntax_check(exec_base: Option<&str>, args: &[String]) -> bool {
+    let flag = match exec_base {
+        Some("php") => &["-l", "--syntax-check"][..],
+        Some("bash") | Some("sh") | Some("zsh") | Some("dash") | Some("ksh") => &["-n"][..],
+        Some("node") | Some("nodejs") => &["--check", "-c"][..],
+        Some("ruby") => &["-c"][..],
+        _ => return false,
+    };
+    args.iter().any(|a| flag.contains(&a.as_str()))
+        && !args
+            .iter()
+            .any(|a| matches!(a.as_str(), "-r" | "-e" | "--eval" | "-p" | "--print"))
+}
+
+/// True when an invocation only asks a program to describe itself:
+/// exactly `--version` / `-V` / `version`, or a `--help` / `-h` / `help`
+/// at the end of an otherwise flag-free subcommand path
+/// (`tool daemon --help`).
+pub(crate) fn is_info_probe(args: &[String]) -> bool {
+    let cleaned: Vec<&str> = args.iter().map(|a| a.trim_matches(['\'', '"'])).collect();
+    match cleaned.as_slice() {
+        [only] if matches!(*only, "--version" | "-V" | "version") => true,
+        [path @ .., last] if matches!(*last, "--help" | "-h" | "help") => {
+            path.iter().all(|a| !a.starts_with('-'))
+        }
+        _ => false,
     }
 }
 
@@ -209,7 +278,32 @@ fn extract_targets(
             }
         }
 
+        // Option values that look like paths but name no file on disk:
+        // install_name_tool's `-change OLD NEW` / `-rpath OLD NEW` / `-id NAME`
+        // are dylib install names, not files being written.
+        let mut skip = 0usize;
+        let skip_counts: &[(&str, usize)] = if exec_base == Some("install_name_tool") {
+            &[
+                ("-change", 2),
+                ("-rpath", 2),
+                ("-id", 1),
+                ("-add_rpath", 1),
+                ("-delete_rpath", 1),
+                ("-prepend_rpath", 1),
+            ]
+        } else {
+            &[]
+        };
+
         for val in &values {
+            if skip > 0 {
+                skip -= 1;
+                continue;
+            }
+            if let Some((_, n)) = skip_counts.iter().find(|(flag, _)| flag == val) {
+                skip = *n;
+                continue;
+            }
             // Skip flags (start with -)
             if val.starts_with('-') {
                 continue;

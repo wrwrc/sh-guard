@@ -325,7 +325,10 @@ fn expansion_variable() {
 #[test]
 fn expansion_command_substitution() {
     let p = parse_bash("echo $(date)");
-    assert_eq!(p.segments.len(), 1);
+    // The substitution body runs a command of its own, so it is analyzed as
+    // a trailing segment in addition to the argument expansion.
+    assert_eq!(p.segments.len(), 2);
+    assert_eq!(p.segments[1].executable.as_deref(), Some("date"));
     let seg = &p.segments[0];
     let expanded_args: Vec<&Argument> = seg.args.iter().filter(|a| a.has_expansion).collect();
     assert!(
@@ -370,7 +373,8 @@ fn expansion_tilde() {
 #[test]
 fn expansion_backtick_command() {
     let p = parse_bash("echo `date`");
-    assert_eq!(p.segments.len(), 1);
+    assert_eq!(p.segments.len(), 2);
+    assert_eq!(p.segments[1].executable.as_deref(), Some("date"));
     let seg = &p.segments[0];
     let expanded_args: Vec<&Argument> = seg.args.iter().filter(|a| a.has_expansion).collect();
     assert!(

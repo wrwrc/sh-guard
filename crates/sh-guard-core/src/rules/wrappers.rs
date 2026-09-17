@@ -112,6 +112,13 @@ fn spec_for(name: &str) -> Option<WrapperSpec> {
             ..DEFAULT_SPEC
         },
         "nohup" | "setsid" | "time" => DEFAULT_SPEC,
+        // `command <cmd>` / `builtin <cmd>` run <cmd> while bypassing
+        // aliases and functions -- a common way to dodge a wrapper alias.
+        // (`command -v` / `-V` only look a name up; handled below.)
+        "command" | "builtin" => WrapperSpec {
+            opts_no_value: &["-p", "--"],
+            ..DEFAULT_SPEC
+        },
         "nice" => WrapperSpec {
             opts_with_value: &["-n", "--adjustment"],
             ..DEFAULT_SPEC
@@ -285,6 +292,13 @@ pub fn classify(name: &str, args: &[String]) -> Option<WrapperClassification> {
         return Some(classify_npx(args));
     }
     let spec = spec_for(name)?;
+    if name == "command" && args.iter().any(|a| a == "-v" || a == "-V") {
+        return Some(WrapperClassification {
+            intent: vec![Intent::Info],
+            reversibility: Reversibility::Reversible,
+            flags: vec![],
+        });
+    }
     let payload = split_payload(&spec, args);
     let has_payload = !payload.is_empty();
 

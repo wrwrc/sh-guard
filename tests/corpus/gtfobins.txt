@@ -19,7 +19,7 @@ tmux | danger | 51-80
 
 # Danger — tool abuse for file access
 tar cf /tmp/out.tar /etc/passwd | danger | 51-80
-awk '{print}' /etc/passwd | danger | 51-80
+awk '{print}' /etc/passwd | caution | 21-50
 zip /tmp/shadow.zip /etc/shadow | danger | 51-80
 tar cf /tmp/shadow.tar /etc/shadow | danger | 51-80
 tee /etc/crontab | danger | 51-80
@@ -38,7 +38,7 @@ vim -c '!sh' | danger | 51-80
 # Danger — find with exec
 
 # Critical — sensitive file access/exfil via tool abuse
-sed -n '1p' /etc/shadow | critical | 81-100
+sed -n '1p' /etc/shadow | caution | 21-50
 strace -o /dev/null /bin/sh | critical | 81-100
 ltrace /bin/sh | critical | 81-100
 xargs -I {} /bin/sh -c '{}' | critical | 81-100

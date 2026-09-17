@@ -189,11 +189,39 @@ fn process_substitution_out_negative() {
 
 #[test]
 fn parameter_expansion_positive() {
-    assert!(detects_pattern(
-        "parameter_expansion",
+    // Forms that can assemble or disguise text: substring, pattern
+    // substitution, case conversion, indirection.
+    for text in [
+        "echo ${x:0:3}",
+        "echo ${x/a/b}",
+        "echo ${x//a/b}",
+        "echo ${x^^}",
+        "echo ${x,,}",
+        "echo ${!ref}",
+    ] {
+        assert!(detects_pattern("parameter_expansion", text, text), "{text}");
+    }
+}
+
+#[test]
+fn parameter_expansion_ignores_everyday_forms() {
+    // Plain references, defaults, lengths and prefix/suffix trims are
+    // ordinary shell and must not read as injection.
+    for text in [
         "echo ${HOME}",
-        "echo ${HOME}"
-    ));
+        "echo ${B:-not found}",
+        "echo ${B:=x}",
+        "echo ${B:?missing}",
+        "echo ${B:+set}",
+        "echo ${#arr}",
+        "echo ${f%.txt}",
+        "echo ${PATH%%:*}",
+    ] {
+        assert!(
+            !detects_pattern("parameter_expansion", text, text),
+            "{text}"
+        );
+    }
 }
 
 #[test]
@@ -379,9 +407,10 @@ fn ansi_c_quoting_negative() {
 
 #[test]
 fn escaped_semicolon_positive() {
+    // The escape is shell-active (unquoted), so it is present in both views.
     assert!(detects_pattern(
         "escaped_semicolon",
-        "find . -name x",
+        "find . -name x \\;",
         "find . -name x \\;"
     ));
 }
@@ -403,9 +432,20 @@ fn escaped_semicolon_negative() {
 fn escaped_pipe_positive() {
     assert!(detects_pattern(
         "escaped_pipe",
-        "echo test",
+        "echo test \\| grep foo",
         "echo test \\| grep foo"
     ));
+}
+
+#[test]
+fn escaped_pipe_inside_quotes_is_regex_not_shell() {
+    // `grep "a\|b"`: inside quotes `\|` is regex alternation.
+    let raw = "grep -n \"a\\|b\" f.php";
+    let hits = rules::injection::detect_injections_in(raw);
+    assert!(
+        !hits.iter().any(|(name, ..)| *name == "escaped_pipe"),
+        "got {hits:?}"
+    );
 }
 
 #[test]
@@ -425,7 +465,7 @@ fn escaped_pipe_negative() {
 fn escaped_ampersand_positive() {
     assert!(detects_pattern(
         "escaped_ampersand",
-        "echo test",
+        "echo test \\&",
         "echo test \\&"
     ));
 }
@@ -613,7 +653,7 @@ fn eval_usage_negative_substring() {
 fn hex_escape_positive() {
     assert!(detects_pattern(
         "hex_escape_sequences",
-        "echo",
+        "echo \\x41",
         "echo \\x41"
     ));
 }
@@ -622,7 +662,7 @@ fn hex_escape_positive() {
 fn unicode_escape_positive() {
     assert!(detects_pattern(
         "hex_escape_sequences",
-        "echo",
+        "echo \\u0041",
         "echo \\u0041"
     ));
 }
@@ -921,16 +961,16 @@ fn every_pattern_has_at_least_one_positive_match() {
             "tee >(grep err)",
             "tee >(grep err)",
         ),
-        ("parameter_expansion", "echo ${HOME}", "echo ${HOME}"),
+        ("parameter_expansion", "echo ${x:0:3}", "echo ${x:0:3}"),
         ("ifs_injection", "cmd$IFSarg", "cmd$IFSarg"),
         ("arithmetic_expansion", "echo $((1+2))", "echo $((1+2))"),
         ("unicode_whitespace", "echo hello", "echo\u{00A0}hello"),
         ("control_characters", "echo hello", "echo\x01hello"),
         ("carriage_return", "echo hello", "echo hello\r"),
         ("ansi_c_quoting", "echo", "echo $'\\x41'"),
-        ("escaped_semicolon", "find .", "find . \\;"),
-        ("escaped_pipe", "echo test", "echo test \\|"),
-        ("escaped_ampersand", "echo test", "echo test \\&"),
+        ("escaped_semicolon", "find . \\;", "find . \\;"),
+        ("escaped_pipe", "echo test \\|", "echo test \\|"),
+        ("escaped_ampersand", "echo test \\&", "echo test \\&"),
         ("brace_expansion", "echo {a,b}", "echo {a,b}"),
         (
             "proc_environ_access",
@@ -944,7 +984,7 @@ fn every_pattern_has_at_least_one_positive_match() {
         ),
         ("base64_pipe", "cat file | base64", "cat file | base64"),
         ("eval_usage", "eval echo", "eval echo"),
-        ("hex_escape_sequences", "echo", "echo \\x41"),
+        ("hex_escape_sequences", "echo \\x41", "echo \\x41"),
         ("ld_preload", "LD_PRELOAD=x cmd", "LD_PRELOAD=x cmd"),
         ("path_injection", "PATH=/evil cmd", "PATH=/evil cmd"),
         (
