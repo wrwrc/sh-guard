@@ -98,6 +98,16 @@ fn classify_inner(
     context: Option<&ClassifyContext>,
     rules_config: Option<&custom_rules::RuleConfig>,
 ) -> AnalysisResult {
+    custom_rules::with_active(rules_config, || {
+        classify_active(command, context, rules_config)
+    })
+}
+
+fn classify_active(
+    command: &str,
+    context: Option<&ClassifyContext>,
+    rules_config: Option<&custom_rules::RuleConfig>,
+) -> AnalysisResult {
     let shell = context.map(|c| c.shell).unwrap_or(Shell::Bash);
 
     // 1. Parse
@@ -178,19 +188,20 @@ fn classify_inner(
     let mut mitre_mappings = vec![];
     for analysis in &analyses {
         if let Some(exec) = &analysis.executable {
-            if let Some(rule) = rules::lookup_command(exec) {
-                if let Some(mitre_id) = rule.mitre {
-                    let mapping = MitreMapping {
-                        technique_id: mitre_id.to_string(),
-                        technique_name: get_mitre_name(mitre_id),
-                        tactic: get_mitre_tactic(mitre_id),
-                    };
-                    if !mitre_mappings
-                        .iter()
-                        .any(|m: &MitreMapping| m.technique_id == mapping.technique_id)
-                    {
-                        mitre_mappings.push(mapping);
-                    }
+            let mitre_id = rules::lookup_command(exec)
+                .and_then(|rule| rule.mitre.map(String::from))
+                .or_else(|| custom_rules::active_command(exec).and_then(|rule| rule.mitre));
+            if let Some(mitre_id) = mitre_id.as_deref() {
+                let mapping = MitreMapping {
+                    technique_id: mitre_id.to_string(),
+                    technique_name: get_mitre_name(mitre_id),
+                    tactic: get_mitre_tactic(mitre_id),
+                };
+                if !mitre_mappings
+                    .iter()
+                    .any(|m: &MitreMapping| m.technique_id == mapping.technique_id)
+                {
+                    mitre_mappings.push(mapping);
                 }
             }
         }

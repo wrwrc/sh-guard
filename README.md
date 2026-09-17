@@ -237,7 +237,7 @@ docker run --rm ghcr.io/aryanbhosale/sh-guard --json "sudo rm -rf /"
 
 | Category | Count | Examples |
 |----------|-------|---------|
-| Command rules | 159 | coreutils, git, gh, curl, docker, kubectl, cloud CLIs |
+| Command rules | 223 | coreutils, git, gh, curl, docker, kubectl, cloud CLIs |
 | Path rules | 51 | .env, .ssh/, /etc/passwd, config files |
 | Injection patterns | 25 | command substitution, IFS injection, unicode tricks |
 | Zsh-specific rules | 15 | module loading, glob qualifiers, equals expansion |
@@ -246,19 +246,31 @@ docker run --rm ghcr.io/aryanbhosale/sh-guard --json "sudo rm -rf /"
 
 ### Custom Rules
 
+Describe your own tools in `.sh-guard.toml` at the project root, or in
+`~/.config/sh-guard/rules.toml`. Without a rule, an unrecognized program is
+treated as arbitrary code execution.
+
 ```toml
-# ~/.config/sh-guard/rules.toml
 [[commands]]
-name = "deploy"
-intent = "execute"
-base_weight = 60
-reversibility = "hard_to_reverse"
+name = "deploy"                   # matched by basename: ./bin/deploy, ~/.local/bin/deploy
+intent = "network"                # info, search, read, write, delete, execute, network,
+                                  # privilege, package_install, git_mutation, env_modify,
+                                  # process_control
+reversibility = "irreversible"    # reversible, hard_to_reverse, irreversible
+mitre = "T1072"                   # optional
 
 [[commands.dangerous_flags]]
-flags = ["--production"]
+flags = ["--production"]          # all tokens must be present
 modifier = 20
 description = "Deploying to production"
 ```
+
+Rules also apply when the tool runs under a wrapper or as a payload
+(`sudo deploy`, `xargs deploy`, `find . -exec deploy {} +`).
+
+Custom command rules only **extend** sh-guard: a rule for a command it
+already classifies (`rm`, `git`, `curl`, `sudo`, ...) is ignored, so a
+project's rules file can't make its own dangerous commands look safe.
 
 ## Performance
 

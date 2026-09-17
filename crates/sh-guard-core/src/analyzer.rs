@@ -60,6 +60,16 @@ fn analyze_segment(
     // what the script does.
     let inline_script_launcher = parser_runs_inline_script(segment);
 
+    // A project/user `[[commands]]` rule, for a program sh-guard doesn't
+    // otherwise know (it can never override a built-in classification).
+    let custom = if special.is_none() && cmd_rule.is_none() && !info_probe {
+        exec_base
+            .and_then(crate::custom_rules::active_command)
+            .map(|rule| crate::custom_rules::resolve(&rule, &arg_values))
+    } else {
+        None
+    };
+
     // 2. Determine intent
     let intent = if inline_script_launcher {
         vec![Intent::Info]
@@ -69,6 +79,8 @@ fn analyze_segment(
         vec![Intent::Info]
     } else if let Some(rule) = cmd_rule {
         vec![rule.intent]
+    } else if let Some((custom_intent, _, _)) = &custom {
+        vec![*custom_intent]
     } else {
         // Unknown command -- default to Execute (conservative)
         vec![Intent::Execute]
@@ -81,6 +93,8 @@ fn analyze_segment(
         special.reversibility
     } else if assignment_only || info_probe {
         Reversibility::Reversible
+    } else if let Some((_, custom_reversibility, _)) = &custom {
+        *custom_reversibility
     } else {
         cmd_rule
             .map(|r| r.reversibility)
@@ -96,6 +110,8 @@ fn analyze_segment(
     let mut flags = vec![];
     if let Some(special) = &special {
         flags.extend(special.flags.iter().cloned());
+    } else if let Some((_, _, custom_flags)) = &custom {
+        flags.extend(custom_flags.iter().cloned());
     } else if let Some(rule) = cmd_rule {
         for flag_rule in rule.dangerous_flags {
             if flag_matches(&segment.raw, flag_rule) {

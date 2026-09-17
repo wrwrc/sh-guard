@@ -150,6 +150,17 @@ pub(crate) fn classify_payload(tokens: &[String]) -> PayloadResult {
         };
     }
 
+    if rules::lookup_command(&head_base).is_none() {
+        if let Some(custom) = crate::custom_rules::active_command(&head_base) {
+            let (intent, reversibility, flags) = crate::custom_rules::resolve(&custom, sub_args);
+            return PayloadResult {
+                intent: vec![intent],
+                reversibility,
+                flags,
+            };
+        }
+    }
+
     match rules::lookup_command(&head_base) {
         Some(rule) => {
             let mut flags = vec![];

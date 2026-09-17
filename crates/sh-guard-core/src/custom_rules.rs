@@ -321,8 +321,12 @@ impl RuleConfig {
     /// Check if a command matches any allow rule.
     pub fn is_allowed(&self, command: &str, executable: Option<&str>) -> Option<&AllowRule> {
         let exec = executable.unwrap_or("");
+        // `~/.local/bin/tool` matches an allow rule for `tool`, the same way
+        // command rules and overrides match by basename.
+        let base = exec.rsplit('/').next().unwrap_or(exec);
         self.allow.iter().find(|rule| {
             exec == rule.pattern
+                || base == rule.pattern
                 || glob_match(&rule.pattern, command)
                 || glob_match(&rule.pattern, exec)
         })
@@ -331,12 +335,13 @@ impl RuleConfig {
     /// Check if a command matches any block rule.
     pub fn is_blocked(&self, command: &str, executable: Option<&str>) -> Option<&BlockRule> {
         let exec = executable.unwrap_or("");
+        let base = exec.rsplit('/').next().unwrap_or(exec);
         self.block.iter().find(|rule| {
-            if rule.pattern.starts_with("regex:") {
-                let pattern = &rule.pattern[6..];
+            if let Some(pattern) = rule.pattern.strip_prefix("regex:") {
                 regex_match(pattern, command)
             } else {
                 exec == rule.pattern
+                    || base == rule.pattern
                     || glob_match(&rule.pattern, command)
                     || glob_match(&rule.pattern, exec)
             }
@@ -347,6 +352,25 @@ impl RuleConfig {
     pub fn lookup_command(&self, executable: &str) -> Option<&CustomCommandRule> {
         let base = executable.rsplit('/').next().unwrap_or(executable);
         self.commands.iter().find(|r| r.name == base)
+    }
+
+    /// The custom rule for `executable`, if it may apply.
+    ///
+    /// Custom command rules *extend* the built-in knowledge; they never
+    /// replace it. `.sh-guard.toml` is discovered from the project being
+    /// worked in, so a repository could otherwise ship
+    /// `[[commands]] name = "rm" intent = "info"` and blind the guard to
+    /// its own commands. A rule for anything sh-guard already classifies
+    /// (a table entry, or a subcommand-aware tool like git/kubectl/sudo)
+    /// is ignored; only otherwise-unknown programs can be described.
+    pub fn applicable_command(&self, executable: &str) -> Option<&CustomCommandRule> {
+        let base = executable.rsplit('/').next().unwrap_or(executable);
+        if crate::rules::lookup_command(base).is_some()
+            || crate::rules::classify_special(Some(base), &[], &[]).is_some()
+        {
+            return None;
+        }
+        self.lookup_command(base)
     }
 
     /// Check if a path matches any custom path rule.
@@ -361,6 +385,70 @@ impl RuleConfig {
         let base = executable.rsplit('/').next().unwrap_or(executable);
         self.overrides.iter().find(|o| o.command == base)
     }
+}
+
+// ========================================================
+// Active rules for the classification in progress
+// ========================================================
+
+thread_local! {
+    static ACTIVE: std::cell::RefCell<Option<std::rc::Rc<RuleConfig>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with `config` as the custom rules in effect.
+///
+/// Command classification is spread across many modules (wrappers, xargs,
+/// find/fd payloads, docker/kubectl exec) that resolve a nested command by
+/// name. Making the rules ambient for the duration of one `classify` call
+/// lets all of them see a custom rule -- `sudo mytool`, `xargs mytool`,
+/// `nohup mytool` -- without threading the config through every signature.
+pub(crate) fn with_active<T>(config: Option<&RuleConfig>, f: impl FnOnce() -> T) -> T {
+    let previous = ACTIVE.with(|a| a.replace(config.map(|c| std::rc::Rc::new(c.clone()))));
+    let result = f();
+    ACTIVE.with(|a| *a.borrow_mut() = previous);
+    result
+}
+
+/// The custom rule that applies to `executable` in the classification in
+/// progress (see `RuleConfig::applicable_command`).
+pub(crate) fn active_command(executable: &str) -> Option<CustomCommandRule> {
+    ACTIVE.with(|a| {
+        a.borrow()
+            .as_ref()
+            .and_then(|config| config.applicable_command(executable).cloned())
+    })
+}
+
+/// Resolve a custom rule against an argv: intent, reversibility and the
+/// dangerous flags present (every token of a flag rule must appear).
+pub(crate) fn resolve(
+    rule: &CustomCommandRule,
+    args: &[String],
+) -> (Intent, Reversibility, Vec<FlagAnalysis>) {
+    let intent = crate::rules::parse_intent(Some(rule.intent.as_str()));
+    let reversibility = crate::rules::parse_reversibility(Some(rule.reversibility.as_str()));
+    let flags = rule
+        .dangerous_flags
+        .iter()
+        .filter(|fr| {
+            fr.flags.iter().all(|flag| {
+                args.iter()
+                    .any(|a| a == flag || a.starts_with(&format!("{flag}=")))
+            })
+        })
+        .map(|fr| FlagAnalysis {
+            flag: fr.flags.join(" "),
+            modifier: fr.modifier,
+            risk_factor: RiskFactor::CommandExecution,
+            description: if fr.description.is_empty() {
+                format!("Custom rule for {}", rule.name)
+            } else {
+                fr.description.clone()
+            },
+        })
+        .collect();
+    (intent, reversibility, flags)
 }
 
 fn dirs() -> Option<PathBuf> {
