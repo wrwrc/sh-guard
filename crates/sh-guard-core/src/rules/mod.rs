@@ -235,13 +235,7 @@ impl RuleSet {
             if pattern.is_empty() {
                 continue;
             }
-            let sensitivity = match tbl.get("sensitivity").and_then(|v| v.as_str()) {
-                Some("secrets") => Sensitivity::Secrets,
-                Some("system") => Sensitivity::System,
-                Some("config") => Sensitivity::Config,
-                Some("protected") => Sensitivity::Protected,
-                _ => Sensitivity::Normal,
-            };
+            let sensitivity = parse_sensitivity(tbl.get("sensitivity").and_then(|v| v.as_str()));
             let description = tbl
                 .get("description")
                 .and_then(|v| v.as_str())
@@ -281,6 +275,16 @@ pub(crate) fn parse_intent(s: Option<&str>) -> Intent {
         Some("env_modify") => Intent::EnvModify,
         Some("process_control") => Intent::ProcessControl,
         _ => Intent::Execute, // default to high-weight intent
+    }
+}
+
+pub(crate) fn parse_sensitivity(s: Option<&str>) -> Sensitivity {
+    match s {
+        Some("secrets") => Sensitivity::Secrets,
+        Some("system") => Sensitivity::System,
+        Some("config") => Sensitivity::Config,
+        Some("protected") => Sensitivity::Protected,
+        _ => Sensitivity::Normal,
     }
 }
 

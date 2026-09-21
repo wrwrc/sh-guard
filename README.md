@@ -268,9 +268,25 @@ description = "Deploying to production"
 Rules also apply when the tool runs under a wrapper or as a payload
 (`sudo deploy`, `xargs deploy`, `find . -exec deploy {} +`).
 
-Custom command rules only **extend** sh-guard: a rule for a command it
+Paths work the same way:
+
+```toml
+[[paths]]
+pattern = "*.myvault"             # no `/`: matches the file name anywhere
+sensitivity = "secrets"           # config, system, secrets, protected
+description = "Team vault export"
+
+[[paths]]
+pattern = "infra/state.db"        # with `/`: matched against the path
+sensitivity = "protected"
+description = "Deployment state"
+```
+
+Custom command and path rules only **extend** sh-guard: a rule for a command it
 already classifies (`rm`, `git`, `curl`, `sudo`, ...) is ignored, so a
-project's rules file can't make its own dangerous commands look safe.
+project's rules file can't make its own dangerous commands look safe. A
+path rule can only raise a path's sensitivity, never lower it, so `.env`
+and `~/.ssh/id_rsa` stay sensitive whatever a rules file says.
 
 ## Performance
 
