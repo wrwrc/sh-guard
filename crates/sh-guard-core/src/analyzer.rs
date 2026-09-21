@@ -325,12 +325,16 @@ fn extract_targets(
                 continue;
             }
 
-            // Check if this looks like a path
+            // Check if this looks like a path. A bare file name counts when
+            // a path rule knows it (`cat id_rsa`, `cat team.myvault`);
+            // otherwise only path-shaped arguments are considered.
             if val.starts_with('/')
                 || val.starts_with('.')
                 || val.starts_with('~')
                 || val.contains('/')
                 || val == "*"
+                || rules::paths::match_sensitivity(val).is_some()
+                || crate::custom_rules::active_path_sensitivity(val).is_some()
             {
                 let scope = context::resolve_scope(val, ctx);
                 let sensitivity = context::resolve_sensitivity(val, ctx);

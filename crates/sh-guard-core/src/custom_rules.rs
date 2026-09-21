@@ -374,10 +374,21 @@ impl RuleConfig {
     }
 
     /// Check if a path matches any custom path rule.
+    ///
+    /// A bare pattern (no `/`) matches the file name, the way the built-in
+    /// path rules do, so `pattern = "*.pem"` matches `certs/key.pem`; a
+    /// pattern with a separator is matched against the whole path.
     pub fn check_path(&self, path: &str) -> Option<&CustomPathRule> {
-        self.paths
-            .iter()
-            .find(|rule| glob_match(&rule.pattern, path))
+        let normalized = path.trim_start_matches("./");
+        let basename = normalized.rsplit('/').next().unwrap_or(normalized);
+        self.paths.iter().find(|rule| {
+            if rule.pattern.contains('/') {
+                glob_match(&rule.pattern, normalized)
+                    || normalized.ends_with(rule.pattern.trim_start_matches("**/"))
+            } else {
+                glob_match(&rule.pattern, basename)
+            }
+        })
     }
 
     /// Get score override for an executable.
@@ -408,6 +419,26 @@ pub(crate) fn with_active<T>(config: Option<&RuleConfig>, f: impl FnOnce() -> T)
     let result = f();
     ACTIVE.with(|a| *a.borrow_mut() = previous);
     result
+}
+
+/// The sensitivity a custom `[[paths]]` rule assigns to `path` in the
+/// classification in progress, with the rule's description.
+///
+/// Like `[[commands]]`, these rules only extend sh-guard: the caller keeps
+/// whichever of the built-in and custom sensitivity is higher, so a
+/// project's rules file can mark extra paths as sensitive but can never
+/// declare `.env` or `~/.ssh/id_rsa` ordinary.
+pub(crate) fn active_path_sensitivity(path: &str) -> Option<(Sensitivity, String)> {
+    ACTIVE.with(|a| {
+        a.borrow().as_ref().and_then(|config| {
+            config.check_path(path).map(|rule| {
+                (
+                    crate::rules::parse_sensitivity(Some(rule.sensitivity.as_str())),
+                    rule.description.clone(),
+                )
+            })
+        })
+    })
 }
 
 /// The custom rule that applies to `executable` in the classification in

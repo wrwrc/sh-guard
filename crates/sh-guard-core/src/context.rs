@@ -48,12 +48,24 @@ pub fn resolve_sensitivity(path: &str, context: Option<&ClassifyContext>) -> Sen
         }
     }
 
-    // Check built-in path rules
-    if let Some((sensitivity, _desc)) = paths::match_sensitivity(path) {
-        return sensitivity;
-    }
+    // Built-in path rules, plus any `[[paths]]` rule from the project's
+    // `.sh-guard.toml`. Custom rules can only raise the sensitivity of a
+    // path, never lower it -- the rules file comes from the repository
+    // being worked in, so it must not be able to declare `.env` ordinary.
+    let builtin = paths::match_sensitivity(path).map(|(sensitivity, _)| sensitivity);
+    let custom = crate::custom_rules::active_path_sensitivity(path).map(|(s, _)| s);
 
-    Sensitivity::Normal
+    match (builtin, custom) {
+        (Some(b), Some(c)) => {
+            if c.modifier() > b.modifier() {
+                c
+            } else {
+                b
+            }
+        }
+        (Some(only), None) | (None, Some(only)) => only,
+        (None, None) => Sensitivity::Normal,
+    }
 }
 
 /// Apply context-based score adjustment.
