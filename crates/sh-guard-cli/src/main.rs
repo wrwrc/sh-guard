@@ -243,7 +243,12 @@ fn main() {
             eprintln!("Warning: rules file not found: {}", rules_path);
             None
         } else {
-            sh_guard_core::custom_rules::RuleConfig::from_file(path)
+            // A file named on the command line is the user's own choice,
+            // so its rules are fully trusted.
+            sh_guard_core::custom_rules::RuleConfig::from_file(
+                path,
+                sh_guard_core::custom_rules::Trust::Full,
+            )
         }
     } else {
         None

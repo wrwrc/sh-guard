@@ -1,5 +1,72 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+
+- **Custom rules are now one `[[rules]]` table.** `allow`, `block`,
+  `[[commands]]`, `[[paths]]` and `[[overrides]]` are no longer read; a rule
+  is `when` (conditions) plus `then` (effects). Migration:
+
+  | Before | Now |
+  |---|---|
+  | `allow = ["just"]` | `when = { command = "just" }`, `then = { decision = "allow" }` |
+  | `block = ["shutdown"]` | `when = { command = "shutdown" }`, `then = { decision = "block" }` |
+  | `block = ["regex:curl.*\| *sh"]` | `when = { command = "regex:..." }` — any condition takes `regex:` |
+  | `[[commands]] name/intent/reversibility/mitre` | `when = { command = ... }`, `then = { intent, reversibility, mitre }` |
+  | `[[commands.dangerous_flags]] flags/modifier` | a second rule: `when = { command, flag = { ... } }`, `then = { score = { raise = N } }` |
+  | `[[paths]] pattern/sensitivity` | `when = { path = ... }`, `then = { sensitivity = ... }` |
+  | `[[overrides]] command/score` | `when = { command = ... }`, `then = { score = { set = N } }` |
+
+  Conditions can also match a subcommand (`"delete pod"`), a flag value
+  (`flag = { context = "kind-*" }`), an argument, sh-guard's own `intent` or
+  `risk_factor`, `env` assignments, `cwd`/`project` and `shell` — so a rule
+  can whitelist `kubectl delete` against a local cluster, or cap the score of
+  a debug pod, without touching the verb elsewhere. Effects gained
+  `score = { cap = N }`.
+
+- **Trust replaces the old per-kind safety rails.** Raising risk applies from
+  any rules file. Lowering it is unlimited from `~/.config/sh-guard/rules.toml`,
+  from a project listed in its `trust = [...]`, or from a file passed with
+  `--rules`; a project's own `.sh-guard.toml` may only soften a command to
+  caution, and not at all when the invocation carries a severe risk factor.
+
+- Removed the unused second rules loader (`rules::RuleSet`).
+
+### Added
+
+- Subcommand/flag-aware classification for `git`, `gh`, `kubectl`, `find`/`fd`,
+  `xargs`, `docker`/`podman`, the npm family, `systemctl`/`service`, the OS and
+  language package managers, `make`/`ninja`, `chmod`, `sed` and `awk`: reads are
+  safe, ordinary mutations are caution, destructive verbs scale with what they
+  destroy.
+- Payload-aware classification for wrappers and exec forms — `sudo`, `env`,
+  `nohup`, `timeout`, `watch`, `ssh <host> <cmd>`, `xargs`, `find -exec`,
+  `fd -x`, `docker run/exec`, `kubectl exec/run/debug` — the payload's own risk
+  leads, so `find -exec ls` stays safe while `find -exec rm -rf` is critical.
+- `[[rules]]` conditions and effects (see above), including `regex:` patterns
+  everywhere and MITRE ids on custom rules.
+- 65 common utilities and shell builtins in the command table.
+
+### Fixed
+
+- Commands inside compound statements (`for`, `while`, `if`, `case`, `{ }`,
+  `( )`, function bodies), command/process substitutions, and scripts passed to
+  `sh -c`/`bash -c`/`eval` are analyzed. Previously a loop body was never looked
+  at, so `for f in x; do rm -rf /; done` scored the same as any other loop.
+- Quoted text is no longer scanned as shell syntax: awk programs, JSON
+  arguments, `grep "a\|b"` and quoted heredoc bodies no longer read as
+  injection, while real expansions still do.
+- Path breadth (`/`, `~`, system directories) only counts for commands that
+  read contents or change something, so `ls /` and `find / -name x` are safe.
+- Bare sensitive filenames (`cat id_rsa`) are recognized as paths.
+- `--version`/`--help` probes, syntax checks (`php -l`, `bash -n`) and bare
+  assignments run no code; piping into an ordinary program is not shell
+  execution.
+- Custom rules apply to auto-discovered configuration, not just to a file
+  passed with `--rules`.
+
+
 ## 0.1.0 (2026-04-03)
 
 Initial release.

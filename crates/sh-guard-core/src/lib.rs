@@ -27,70 +27,158 @@ pub mod test_internals {
     pub use crate::scorer;
 }
 
-/// Classify a shell command with custom rules.
+/// Classify a shell command with an explicit set of rules.
 pub fn classify_with_rules(
     command: &str,
     context: Option<&ClassifyContext>,
     rules_config: Option<&custom_rules::RuleConfig>,
 ) -> AnalysisResult {
-    // 0. Run built-in analysis WITHOUT custom rules first, to get the
-    //    unbiased risk score. Allow rules are only honored when the built-in
-    //    score is below danger threshold (< 80) AND the command has no critical
-    //    risk factors, preventing malicious configs from whitelisting truly
-    //    dangerous commands while still allowing legitimate project tools.
-    let builtin_result = classify_inner(command, context, None);
+    classify_inner(command, context, rules_config)
+}
 
-    if let Some(config) = rules_config {
-        let exec = command.split_whitespace().next();
-        if let Some(allow) = config.is_allowed(command, exec) {
-            if builtin_result.score < 80 && builtin_result.risk_factors.is_empty() {
-                return AnalysisResult {
-                    command: command.to_string(),
-                    score: 0,
-                    level: RiskLevel::Safe,
-                    quick_decision: QuickDecision::Safe,
-                    reason: allow.reason.clone(),
-                    risk_factors: vec![],
-                    sub_commands: vec![],
-                    pipeline_flow: None,
-                    mitre_mappings: vec![],
-                    parse_confidence: ParseConfidence::Full,
-                };
+/// Risk factors that an untrusted project's rules may not soften away: they
+/// describe the *invocation* as dangerous, not the tool as ordinary.
+///
+/// Allowing a tool says "this program is part of how we work"; from a file
+/// that arrived with a checkout, it cannot also say "and whatever it does
+/// with it is fine".
+fn is_severe_risk_factor(factor: &RiskFactor) -> bool {
+    matches!(
+        factor,
+        RiskFactor::RecursiveDelete
+            | RiskFactor::SecretsExposure
+            | RiskFactor::NetworkExfiltration
+            | RiskFactor::PipeToExecution
+            | RiskFactor::UntrustedExecution
+            | RiskFactor::PrivilegeEscalation
+            | RiskFactor::PathInjection
+            | RiskFactor::GitHistoryDestruction
+            | RiskFactor::EscapesProjectBoundary
+            | RiskFactor::ShellInjection
+            | RiskFactor::ZshModuleLoading
+            | RiskFactor::ZshGlobExecution
+            | RiskFactor::ObfuscatedCommand
+            | RiskFactor::ObfuscatedExfiltration
+            | RiskFactor::CommandSubstitution
+            | RiskFactor::ProcessSubstitution
+    )
+}
+
+/// The floor an untrusted project's rules may soften a segment to.
+const UNTRUSTED_SCORE_FLOOR: u8 = 21;
+
+/// Apply the decision and score effects of every rule that matches a
+/// scored segment, honoring the trust rails: raising risk is always
+/// allowed; lowering it is limited for rules that came with the project.
+///
+/// Returns the decision the whole command ended up with, if any.
+fn apply_rule_effects(
+    analyses: &mut [CommandAnalysis],
+    context: Option<&ClassifyContext>,
+    shell: Shell,
+) -> Option<(custom_rules::Decision, String)> {
+    let mut decision: Option<(custom_rules::Decision, String)> = None;
+
+    for analysis in analyses.iter_mut() {
+        let match_ctx = custom_rules::MatchContext {
+            executable: analysis.executable.clone().unwrap_or_default(),
+            subcommands: custom_rules::subcommand_path(&split_args(&analysis.command)),
+            flags: custom_rules::flag_pairs(&split_args(&analysis.command)),
+            args: split_args(&analysis.command),
+            paths: analysis
+                .targets
+                .iter()
+                .filter_map(|t| t.path.clone())
+                .collect(),
+            intents: analysis.intent.clone(),
+            risk_factors: analysis.risk_factors.clone(),
+            env: vec![],
+            cwd: context.and_then(|c| c.cwd.clone()),
+            project: context.and_then(|c| c.project_root.clone()),
+            shell,
+        };
+
+        let severe = analysis.risk_factors.iter().any(is_severe_risk_factor);
+
+        for rule in custom_rules::effects_for(&match_ctx) {
+            let trusted = rule.trust == custom_rules::Trust::Full;
+            let reason = rule
+                .then
+                .reason
+                .clone()
+                .unwrap_or_else(|| format!("Custom rule: {}", rule.name));
+
+            if let Some(effect) = rule.then.score {
+                let mut score = analysis.score;
+                if let Some(set) = effect.set {
+                    score = set;
+                }
+                if let Some(raise) = effect.raise {
+                    score = score.saturating_add(raise).min(100);
+                }
+                if let Some(cap) = effect.cap {
+                    score = score.min(cap);
+                }
+                analysis.score = bounded(analysis.score, score, trusted, severe);
             }
-            // Built-in analysis detected critical risk (score >= 70);
-            // ignore the allow rule and fall through to the built-in result.
-        }
-        if let Some(block) = config.is_blocked(command, exec) {
-            let mitre = block.mitre.as_ref().map(|id| MitreMapping {
-                technique_id: id.clone(),
-                technique_name: get_mitre_name(id),
-                tactic: get_mitre_tactic(id),
-            });
-            // Block rules still apply unconditionally.
-            return AnalysisResult {
-                command: command.to_string(),
-                score: 100,
-                level: RiskLevel::Critical,
-                quick_decision: QuickDecision::Blocked,
-                reason: block.reason.clone(),
-                risk_factors: vec![],
-                sub_commands: vec![],
-                pipeline_flow: None,
-                mitre_mappings: mitre.into_iter().collect(),
-                parse_confidence: ParseConfidence::Full,
-            };
+
+            match rule.then.decision {
+                Some(custom_rules::Decision::Block) => {
+                    // A block always applies, and always wins.
+                    analysis.score = 100;
+                    decision = Some((custom_rules::Decision::Block, reason));
+                }
+                Some(custom_rules::Decision::Allow) => {
+                    let lowered = bounded(analysis.score, 0, trusted, severe);
+                    analysis.score = lowered;
+                    if lowered == 0 && !matches!(decision, Some((custom_rules::Decision::Block, _)))
+                    {
+                        decision = Some((custom_rules::Decision::Allow, reason));
+                    }
+                }
+                None => {}
+            }
         }
     }
 
-    // No allow/block matched — return the full analysis with custom overrides applied.
-    classify_inner(command, context, rules_config)
+    decision
+}
+
+/// What a rule is allowed to move a segment's score to.
+///
+/// Raising is always permitted. Lowering is permitted outright for rules
+/// the user trusts; a project's own rules may only soften a segment to
+/// [`UNTRUSTED_SCORE_FLOOR`], and not at all once the invocation carries a
+/// severe risk factor of its own.
+fn bounded(current: u8, proposed: u8, trusted: bool, severe: bool) -> u8 {
+    if proposed >= current {
+        return proposed;
+    }
+    if trusted {
+        return proposed;
+    }
+    if severe {
+        return current;
+    }
+    proposed.max(UNTRUSTED_SCORE_FLOOR).min(current)
+}
+
+/// Best-effort argv for a segment's raw text, for rule matching.
+fn split_args(command: &str) -> Vec<String> {
+    command
+        .split_whitespace()
+        .skip(1)
+        .map(String::from)
+        .collect()
 }
 
 /// Classify a shell command and return a rich analysis.
 pub fn classify(command: &str, context: Option<&ClassifyContext>) -> AnalysisResult {
-    // Auto-discover project rules
+    // Auto-discovered rules get the same treatment as rules passed
+    // explicitly: allow/block entries are honored too, not just command,
+    // path and override rules.
     let discovered = custom_rules::RuleConfig::discover(context);
-    classify_inner(command, context, discovered.as_ref())
+    classify_with_rules(command, context, discovered.as_ref())
 }
 
 fn classify_inner(
@@ -141,19 +229,12 @@ fn classify_active(
         scorer::score_command(analysis, context);
     }
 
-    // 5. Apply custom score overrides (with safety floor)
-    if let Some(config) = rules_config {
-        for analysis in &mut analyses {
-            if let Some(exec) = &analysis.executable {
-                if let Some(ovr) = config.get_override(exec) {
-                    // Overrides can only raise the score, never lower it below
-                    // the built-in analysis result. This prevents malicious configs
-                    // from trivializing known-dangerous commands.
-                    analysis.score = ovr.score.max(analysis.score);
-                }
-            }
-        }
-    }
+    // 5. Apply the decision and score effects of matching custom rules
+    let rule_decision = if rules_config.is_some() {
+        apply_rule_effects(&mut analyses, context, shell)
+    } else {
+        None
+    };
 
     // 6. Pipeline analysis
     let pipeline_flow = pipeline::analyze_pipeline(&analyses, &parsed.chain_operators);
@@ -174,7 +255,11 @@ fn classify_active(
     };
 
     let level = RiskLevel::from_score(final_score);
-    let quick_decision = QuickDecision::from_level(level);
+    let quick_decision = match rule_decision {
+        Some((custom_rules::Decision::Block, _)) => QuickDecision::Blocked,
+        Some((custom_rules::Decision::Allow, _)) => QuickDecision::Safe,
+        None => QuickDecision::from_level(level),
+    };
 
     // Collect all risk factors
     let mut all_risk_factors: Vec<RiskFactor> = analyses
@@ -190,7 +275,7 @@ fn classify_active(
         if let Some(exec) = &analysis.executable {
             let mitre_id = rules::lookup_command(exec)
                 .and_then(|rule| rule.mitre.map(String::from))
-                .or_else(|| custom_rules::active_command(exec).and_then(|rule| rule.mitre));
+                .or_else(|| custom_rules::active_mitre(exec, &analysis.command));
             if let Some(mitre_id) = mitre_id.as_deref() {
                 let mapping = MitreMapping {
                     technique_id: mitre_id.to_string(),
@@ -224,6 +309,12 @@ fn classify_active(
         }
     };
 
+    // A rule that decided the outcome explains it in its own words.
+    let reason = match &rule_decision {
+        Some((_, rule_reason)) => rule_reason.clone(),
+        None => reason,
+    };
+
     AnalysisResult {
         command: command.to_string(),
         score: final_score,
@@ -254,7 +345,7 @@ pub fn classify_batch(commands: &[&str], context: Option<&ClassifyContext>) -> V
     let discovered = custom_rules::RuleConfig::discover(context);
     commands
         .iter()
-        .map(|cmd| classify_inner(cmd, context, discovered.as_ref()))
+        .map(|cmd| classify_with_rules(cmd, context, discovered.as_ref()))
         .collect()
 }
 
