@@ -235,112 +235,32 @@ docker run --rm ghcr.io/aryanbhosale/sh-guard --json "sudo rm -rf /"
 
 ## Rule System
 
-| Category | Count | Examples |
-|----------|-------|---------|
-| Command rules | 223 | coreutils, git, gh, curl, docker, kubectl, cloud CLIs |
-| Path rules | 51 | .env, .ssh/, /etc/passwd, config files |
-| Injection patterns | 25 | command substitution, IFS injection, unicode tricks |
-| Zsh-specific rules | 15 | module loading, glob qualifiers, equals expansion |
-| GTFOBins entries | 61 | binary capability database for privilege escalation |
-| Taint flow rules | 15 | data-flow escalation patterns for pipelines |
+sh-guard ships 223 command rules, 51 path rules, 25 injection patterns, 15
+zsh-specific rules, 61 GTFOBins entries and 15 taint-flow rules, so it gives
+sensible answers with no configuration at all.
 
-### Custom Rules
-
-One table, `[[rules]]`: each rule is `when` (conditions) plus `then`
-(effects). Put them in `.sh-guard.toml` at the project root, or in
-`~/.config/sh-guard/rules.toml`.
+When your setup differs from the default assumption — a destructive verb that
+is harmless against your throwaway cluster, a program sh-guard has never heard
+of, a file it thinks is ordinary but which holds your secrets — write a rule.
+Rules go in `.sh-guard.toml` at the project root, or in
+`~/.config/sh-guard/rules.toml`:
 
 ```toml
-version = 2
-
-# Whitelist a destructive verb, but only against a throwaway cluster.
 [[rules]]
 name = "local clusters are disposable"
 when = { command = "kubectl", flag = { context = ["kind-*", "minikube"] } }
 then = { decision = "allow", reason = "throwaway local cluster" }
-
-# Soften one invocation shape without touching the rest of the verb.
-[[rules]]
-name = "debug pods are disposable"
-when = { command = "kubectl", subcommand = "delete pod", arg = "debug-*" }
-then = { score = { cap = 30 } }
-
-# Describe a tool sh-guard doesn't know (otherwise: arbitrary code execution).
-[[rules]]
-when = { command = "deploy" }
-then = { intent = "network", reversibility = "irreversible", mitre = "T1072" }
-
-[[rules]]
-when = { command = "deploy", flag = { env = "production" } }
-then = { score = { raise = 25 }, reason = "production deploy" }
-
-# Mark your own sensitive files.
-[[rules]]
-when = { path = "*.myvault" }
-then = { sensitivity = "secrets" }
-
-[[rules]]
-when = { command = ["shutdown", "reboot"] }
-then = { decision = "block", reason = "not on this machine" }
 ```
 
-Keys inside `when` are ANDed; a list inside one key is ORed. Every string is
-a glob (`*`, `?`), or a regular expression with the `regex:` prefix.
+Each rule is `when` (conditions) plus `then` (effects). Conditions can match
+the command, its subcommand, a flag value, an argument, a path, sh-guard's own
+conclusions, or where the command runs; effects can allow, block, re-score, or
+describe a program sh-guard doesn't know.
 
-| `when` key | Matches |
-|---|---|
-| `command` | the executable, by basename or full path |
-| `subcommand` | the verb path: `"delete"`, `"delete pod"`, `"repo delete"` |
-| `flag` | `{ context = "kind-*" }`, or `{ force = true }` for presence |
-| `arg` | any argument token |
-| `path` | a resolved target path (bare pattern matches the file name) |
-| `intent` | what sh-guard concluded: `delete`, `network`, ... |
-| `risk_factor` | what it found: `recursive_delete`, `secrets_exposure`, ... |
-| `env` | `NAME=value` prefix assignments |
-| `cwd`, `project` | where the command runs |
-| `shell` | `bash` or `zsh` |
-
-| `then` key | Effect |
-|---|---|
-| `decision` | `"allow"` (score 0) or `"block"` (score 100) |
-| `intent`, `reversibility` | classify a program sh-guard doesn't know |
-| `sensitivity` | `config`, `system`, `secrets`, `protected` — for `path` rules |
-| `score` | `{ set = N }`, `{ raise = N }`, `{ cap = N }` |
-| `mitre` | ATT&CK technique id to report |
-| `reason` | shown instead of the generated reason when the rule decides |
-
-Rules are evaluated in file order and every match applies; project rules are
-evaluated before the user's. Conditions that ask about `intent` or
-`risk_factor` see sh-guard's own conclusions, and effects apply only to the
-segment that matched — allowing `npm run build` cannot quiet an
-`&& rm -rf ~` beside it.
-
-#### Trust
-
-**Raising** risk — `block`, `score.raise`, a stricter `intent` — always
-applies, from any rules file.
-
-**Lowering** risk depends on where the file came from. Your own
-`~/.config/sh-guard/rules.toml` is trusted; a `.sh-guard.toml` that arrived
-with a checkout is not, unless you say so:
-
-```toml
-# ~/.config/sh-guard/rules.toml
-trust = ["~/work/*", "~/houzz/c2"]     # project roots whose rules are fully honored
-```
-
-| | Trusted | Untrusted project file |
-|---|---|---|
-| Lower to safe / `allow` | yes | no |
-| Lower at all | yes | only to caution (21), and only when the command carries no severe risk factor |
-
-A severe risk factor is one that marks the invocation itself as dangerous:
-recursive deletion, secrets exposure, privilege escalation, injection,
-exfiltration, obfuscation, git history destruction. So a repository's own
-rules can soften `kubectl delete pod` from danger to caution, but not
-`rm -rf ~`, and never all the way to safe. `block` always beats `allow`.
-
-Rules passed explicitly with `--rules <file>` are trusted: you chose them.
+**📖 [Writing Rules](https://github.com/wrwrc/sh-guard/wiki/Writing-Rules)** —
+the complete guide: every condition and effect, pattern syntax, the trust model
+that governs what a repository's own rules may soften, a cookbook, and how to
+debug a rule that isn't firing.
 
 ## Performance
 
