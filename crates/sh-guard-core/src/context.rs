@@ -53,7 +53,7 @@ pub fn resolve_sensitivity(path: &str, context: Option<&ClassifyContext>) -> Sen
     // path, never lower it -- the rules file comes from the repository
     // being worked in, so it must not be able to declare `.env` ordinary.
     let builtin = paths::match_sensitivity(path).map(|(sensitivity, _)| sensitivity);
-    let custom = crate::custom_rules::active_path_sensitivity(path).map(|(s, _)| s);
+    let custom = crate::custom_rules::path_sensitivity(path).map(|(s, _)| s);
 
     match (builtin, custom) {
         (Some(b), Some(c)) => {

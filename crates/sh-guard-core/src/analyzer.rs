@@ -60,12 +60,21 @@ fn analyze_segment(
     // what the script does.
     let inline_script_launcher = parser_runs_inline_script(segment);
 
-    // A project/user `[[commands]]` rule, for a program sh-guard doesn't
-    // otherwise know (it can never override a built-in classification).
+    // A custom `[[rules]]` classification, for a program sh-guard doesn't
+    // otherwise know (a rule can never override a built-in classification).
     let custom = if special.is_none() && cmd_rule.is_none() && !info_probe {
-        exec_base
-            .and_then(crate::custom_rules::active_command)
-            .map(|rule| crate::custom_rules::resolve(&rule, &arg_values))
+        let ctx_match = crate::custom_rules::MatchContext {
+            executable: executable.unwrap_or_default().to_string(),
+            subcommands: crate::custom_rules::subcommand_path(&arg_values),
+            flags: crate::custom_rules::flag_pairs(&arg_values),
+            args: arg_values.clone(),
+            env: env_assignments.clone(),
+            cwd: ctx.and_then(|c| c.cwd.clone()),
+            project: ctx.and_then(|c| c.project_root.clone()),
+            shell,
+            ..Default::default()
+        };
+        crate::custom_rules::classification_for(&ctx_match)
     } else {
         None
     };
@@ -79,7 +88,7 @@ fn analyze_segment(
         vec![Intent::Info]
     } else if let Some(rule) = cmd_rule {
         vec![rule.intent]
-    } else if let Some((custom_intent, _, _)) = &custom {
+    } else if let Some((Some(custom_intent), _, _)) = &custom {
         vec![*custom_intent]
     } else {
         // Unknown command -- default to Execute (conservative)
@@ -93,7 +102,7 @@ fn analyze_segment(
         special.reversibility
     } else if assignment_only || info_probe {
         Reversibility::Reversible
-    } else if let Some((_, custom_reversibility, _)) = &custom {
+    } else if let Some((_, Some(custom_reversibility), _)) = &custom {
         *custom_reversibility
     } else {
         cmd_rule
@@ -110,8 +119,6 @@ fn analyze_segment(
     let mut flags = vec![];
     if let Some(special) = &special {
         flags.extend(special.flags.iter().cloned());
-    } else if let Some((_, _, custom_flags)) = &custom {
-        flags.extend(custom_flags.iter().cloned());
     } else if let Some(rule) = cmd_rule {
         for flag_rule in rule.dangerous_flags {
             if flag_matches(&segment.raw, flag_rule) {
@@ -334,7 +341,7 @@ fn extract_targets(
                 || val.contains('/')
                 || val == "*"
                 || rules::paths::match_sensitivity(val).is_some()
-                || crate::custom_rules::active_path_sensitivity(val).is_some()
+                || crate::custom_rules::path_sensitivity(val).is_some()
             {
                 let scope = context::resolve_scope(val, ctx);
                 let sensitivity = context::resolve_sensitivity(val, ctx);

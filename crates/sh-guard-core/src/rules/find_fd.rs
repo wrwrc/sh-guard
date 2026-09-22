@@ -151,13 +151,21 @@ pub(crate) fn classify_payload(tokens: &[String]) -> PayloadResult {
     }
 
     if rules::lookup_command(&head_base).is_none() {
-        if let Some(custom) = crate::custom_rules::active_command(&head_base) {
-            let (intent, reversibility, flags) = crate::custom_rules::resolve(&custom, sub_args);
-            return PayloadResult {
-                intent: vec![intent],
-                reversibility,
-                flags,
-            };
+        let ctx = crate::custom_rules::MatchContext {
+            executable: head.clone(),
+            subcommands: crate::custom_rules::subcommand_path(sub_args),
+            flags: crate::custom_rules::flag_pairs(sub_args),
+            args: sub_args.to_vec(),
+            ..Default::default()
+        };
+        if let Some((intent, reversibility, _)) = crate::custom_rules::classification_for(&ctx) {
+            if intent.is_some() || reversibility.is_some() {
+                return PayloadResult {
+                    intent: intent.into_iter().collect(),
+                    reversibility: reversibility.unwrap_or(Reversibility::HardToReverse),
+                    flags: vec![],
+                };
+            }
         }
     }
 
