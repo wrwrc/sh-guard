@@ -362,3 +362,150 @@ fn cli_no_default_rules_alone_applies_no_rules() {
         unruled(&f)
     );
 }
+
+// ---------------------------------------------------------------------------
+// The agent hook installed by --setup
+// ---------------------------------------------------------------------------
+
+/// Install the hook into a temporary HOME and return (home, hook path).
+fn installed_hook() -> (tempfile::TempDir, std::path::PathBuf) {
+    let home = tempfile::tempdir().unwrap();
+    let status = sh_guard()
+        .env("HOME", home.path())
+        .arg("--setup")
+        .output()
+        .unwrap();
+    assert!(status.status.success(), "--setup failed: {:?}", status);
+    let hook = home.path().join(".sh-guard/hook.sh");
+    assert!(hook.exists(), "--setup did not write the hook");
+    (home, hook)
+}
+
+/// Run the hook as an agent would: tool input JSON on stdin, `sh-guard` on
+/// PATH. Returns (exit code, stderr).
+fn run_hook(
+    home: &std::path::Path,
+    hook: &std::path::Path,
+    command: &str,
+    cwd: &std::path::Path,
+) -> (i32, String) {
+    let bin_dir = std::path::Path::new(env!("CARGO_BIN_EXE_sh-guard"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let input = serde_json::json!({
+        "tool_input": { "command": command },
+        "cwd": cwd,
+    });
+    let mut child = Command::new("sh")
+        .arg(hook)
+        .env("HOME", home)
+        .env("PATH", path)
+        // The hook must use the `cwd` from the input, not its own.
+        .current_dir(std::env::temp_dir())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+fn have(tool: &str) -> bool {
+    Command::new(tool)
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+const BLOCK_RULE: &str = "[[rules]]\nwhen = { command = \"zz-deploy\" }\n\
+                          then = { decision = \"block\", reason = \"project says no\" }\n";
+
+#[test]
+fn hook_applies_the_projects_rules() {
+    if !have("jq") {
+        eprintln!("skipping: jq not installed");
+        return;
+    }
+    let (home, hook) = installed_hook();
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join(".sh-guard.toml"), BLOCK_RULE).unwrap();
+
+    let (code, stderr) = run_hook(home.path(), &hook, "zz-deploy", project.path());
+    assert_eq!(code, 2, "project block rule should block; stderr: {stderr}");
+    assert!(stderr.contains("project says no"), "stderr: {stderr}");
+
+    let (code, _) = run_hook(home.path(), &hook, "ls", project.path());
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn hook_finds_project_rules_from_a_subdirectory() {
+    if !have("jq") || !have("git") {
+        eprintln!("skipping: jq or git not installed");
+        return;
+    }
+    let (home, hook) = installed_hook();
+    let project = tempfile::tempdir().unwrap();
+    assert!(Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(project.path())
+        .status()
+        .unwrap()
+        .success());
+    std::fs::write(project.path().join(".sh-guard.toml"), BLOCK_RULE).unwrap();
+    let sub = project.path().join("src/deep");
+    std::fs::create_dir_all(&sub).unwrap();
+
+    let (code, stderr) = run_hook(home.path(), &hook, "zz-deploy", &sub);
+    assert_eq!(
+        code, 2,
+        "rule at the repo root should apply; stderr: {stderr}"
+    );
+}
+
+#[test]
+fn hook_keeps_the_block_reason_when_a_rules_file_warns() {
+    if !have("jq") {
+        eprintln!("skipping: jq not installed");
+        return;
+    }
+    let (home, hook) = installed_hook();
+    // A user rules file with one bad rule: sh-guard warns on stderr.
+    let config = home.path().join(".config/sh-guard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("rules.toml"),
+        "[[rules]]\nname = \"typo\"\nwhen = { command = \"x\" }\nthen = { intent = \"reed\" }\n",
+    )
+    .unwrap();
+    let project = tempfile::tempdir().unwrap();
+
+    let (code, stderr) = run_hook(home.path(), &hook, "rm -rf ~/", project.path());
+    assert_eq!(code, 2);
+    // The warning reaches the agent...
+    assert!(
+        stderr.contains("\"reed\" is not a known value"),
+        "stderr: {stderr}"
+    );
+    // ...and no longer corrupts the JSON the reason is read from.
+    assert!(
+        stderr.contains("sh-guard BLOCKED: ") && !stderr.contains("sh-guard BLOCKED: \n"),
+        "reason lost; stderr: {stderr}"
+    );
+}
