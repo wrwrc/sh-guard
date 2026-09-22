@@ -440,3 +440,43 @@ fn every_documented_vocabulary_value_is_accepted() {
         );
     }
 }
+
+#[test]
+fn an_invalid_regex_drops_the_rule_instead_of_never_matching() {
+    // A `regex:` that failed to compile used to become a pattern that
+    // matches nothing: a rule that loads fine and silently never fires.
+    let config = load(
+        r#"
+[[rules]]
+name = "bad arg"
+when = { command = "psql", arg = 'regex:(?i)^(select' }
+then = { intent = "read" }
+
+[[rules]]
+name = "bad flag value"
+when = { command = "kubectl", flag = { context = "regex:kind-[" } }
+then = { decision = "allow" }
+
+[[rules]]
+name = "fine"
+when = { command = "mytool", arg = 'regex:^ok$' }
+then = { score = { set = 7 } }
+"#,
+    );
+    let names: Vec<_> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["fine"]);
+    assert_eq!(
+        classify_with_rules("mytool ok", None, Some(&config)).score,
+        7
+    );
+}
+
+#[test]
+fn an_invalid_trust_pattern_trusts_nothing_extra() {
+    let config = load(
+        r#"
+trust = ["regex:~/work/(unclosed", "~/ok/*"]
+"#,
+    );
+    assert_eq!(config.trust.len(), 1);
+}

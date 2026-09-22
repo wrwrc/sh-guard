@@ -78,6 +78,9 @@
   prints a `sh-guard:` warning on stderr naming the file and rule:
   - a TOML syntax error, which discards the whole file;
   - a rule with no conditions or no effects;
+  - a `regex:` pattern that does not compile — the rule is now ignored
+    instead of kept as a condition that can never match (an invalid `trust`
+    entry is skipped);
   - an unrecognized `intent`, `risk_factor`, `sensitivity`, `reversibility`,
     `decision` or `shell` — the rule is now ignored instead of resolved to a
     default. A typo in `then.intent` used to mean `execute`, making the rule

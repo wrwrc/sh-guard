@@ -131,6 +131,17 @@ pub enum Pattern {
 }
 
 impl Pattern {
+    /// Like [`Pattern::parse`], but reports a `regex:` pattern that does not
+    /// compile instead of turning it into one that matches nothing.
+    pub fn try_parse(text: &str) -> Result<Self, String> {
+        match text.strip_prefix("regex:") {
+            Some(expr) => regex::Regex::new(expr)
+                .map(|re| Pattern::Regex(Box::new(re)))
+                .map_err(|e| e.to_string()),
+            None => Ok(Pattern::Glob(text.to_string())),
+        }
+    }
+
     pub fn parse(text: &str) -> Self {
         match text.strip_prefix("regex:") {
             Some(expr) => match regex::Regex::new(expr) {
@@ -208,7 +219,14 @@ impl RuleConfig {
             .flatten()
         {
             if let Some(s) = item.as_str() {
-                config.trust.push(Pattern::parse(&expand_tilde(s)));
+                match Pattern::try_parse(&expand_tilde(s)) {
+                    Ok(pattern) => config.trust.push(pattern),
+                    // Skipping it can only trust fewer projects, never more.
+                    Err(e) => warn(format!(
+                        "{}: trust = \"{}\" is not a valid pattern — entry ignored: {}",
+                        source, s, e
+                    )),
+                }
             }
         }
 
@@ -324,14 +342,14 @@ fn parse_when(table: Option<&toml::Table>, where_: &str) -> Option<When> {
         return Some(when);
     };
 
-    when.command = patterns(table.get("command"));
-    when.subcommand = patterns(table.get("subcommand"));
-    when.arg = patterns(table.get("arg"));
-    when.path = patterns(table.get("path"));
-    when.cwd = patterns(table.get("cwd"));
-    when.project = patterns(table.get("project"));
-    when.flag = flag_conditions(table.get("flag"));
-    when.env = flag_conditions(table.get("env"));
+    when.command = patterns(table.get("command"), "command", where_)?;
+    when.subcommand = patterns(table.get("subcommand"), "subcommand", where_)?;
+    when.arg = patterns(table.get("arg"), "arg", where_)?;
+    when.path = patterns(table.get("path"), "path", where_)?;
+    when.cwd = patterns(table.get("cwd"), "cwd", where_)?;
+    when.project = patterns(table.get("project"), "project", where_)?;
+    when.flag = flag_conditions(table.get("flag"), "flag", where_)?;
+    when.env = flag_conditions(table.get("env"), "env", where_)?;
     when.intent = vocabulary(table.get("intent"), "intent", where_)?;
     when.risk_factor = vocabulary(table.get("risk_factor"), "risk_factor", where_)?;
     when.shell = match table.get("shell").and_then(|v| v.as_str()) {
@@ -480,32 +498,54 @@ fn strings(value: Option<&toml::Value>) -> Vec<String> {
     }
 }
 
-fn patterns(value: Option<&toml::Value>) -> Vec<Pattern> {
+fn patterns(value: Option<&toml::Value>, key: &str, where_: &str) -> Option<Vec<Pattern>> {
     strings(value)
         .iter()
-        .map(|s| Pattern::parse(&expand_tilde(s)))
+        .map(|s| checked_pattern(&expand_tilde(s), key, where_))
         .collect()
 }
 
-fn flag_conditions(value: Option<&toml::Value>) -> Vec<FlagCondition> {
+fn flag_conditions(
+    value: Option<&toml::Value>,
+    key: &str,
+    where_: &str,
+) -> Option<Vec<FlagCondition>> {
     let Some(table) = value.and_then(|v| v.as_table()) else {
-        return vec![];
+        return Some(vec![]);
     };
     table
         .iter()
-        .map(|(name, value)| FlagCondition {
-            name: name.clone(),
-            values: match value {
-                toml::Value::Boolean(true) => None,
-                other => Some(
-                    strings(Some(other))
-                        .iter()
-                        .map(|s| Pattern::parse(s))
-                        .collect(),
-                ),
-            },
+        .map(|(name, value)| {
+            Some(FlagCondition {
+                name: name.clone(),
+                values: match value {
+                    toml::Value::Boolean(true) => None,
+                    other => Some(
+                        strings(Some(other))
+                            .iter()
+                            .map(|s| checked_pattern(s, &format!("{}.{}", key, name), where_))
+                            .collect::<Option<Vec<_>>>()?,
+                    ),
+                },
+            })
         })
         .collect()
+}
+
+/// A pattern from a rule condition. A `regex:` that does not compile would
+/// otherwise match nothing — a rule that silently never fires — so the
+/// rule is refused with a warning instead.
+fn checked_pattern(text: &str, key: &str, where_: &str) -> Option<Pattern> {
+    match Pattern::try_parse(text) {
+        Ok(pattern) => Some(pattern),
+        Err(e) => {
+            warn(format!(
+                "{}: {} = \"{}\" is not a valid regex — rule ignored: {}",
+                where_, key, text, e
+            ));
+            None
+        }
+    }
 }
 
 /// Parse one of the snake_case vocabulary enums (`Intent`, `Sensitivity`,
