@@ -64,6 +64,17 @@
 
 ### Fixed
 
+- The agent hook installed by `--setup` now applies the project's
+  `.sh-guard.toml`. It classifies in the directory the agent reports
+  (falling back to its own), passes the git repository root as the project
+  root so the file is found from a subdirectory, and so judges paths
+  relative to the project. Previously it passed no context, so only
+  `~/.config/sh-guard/rules.toml` ever applied. Re-run `sh-guard --setup`
+  to update an installed hook.
+- The hook no longer mixes sh-guard's stderr into the JSON it reads the
+  block reason from, so a rules-file warning no longer blanks the reason —
+  and the warning itself now reaches the agent instead of being discarded.
+
 - Commands inside compound statements (`for`, `while`, `if`, `case`, `{ }`,
   `( )`, function bodies), command/process substitutions, and scripts passed to
   `sh -c`/`bash -c`/`eval` are analyzed. Previously a loop body was never looked

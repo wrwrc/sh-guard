@@ -112,13 +112,25 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "sh-guard: jq not found — blocking command (fail-closed)" >&2
   exit 1
 fi
-COMMAND=$(cat | jq -r '.tool_input.command // empty' 2>/dev/null)
+INPUT=$(cat)
+COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
 [ -z "$COMMAND" ] && exit 0
-RESULT=$(sh-guard --json --exit-code "$COMMAND" 2>&1)
+
+# Classify where the agent is working, so the project's .sh-guard.toml is
+# found (from the repository root, even in a subdirectory) and paths are
+# judged relative to the project.
+CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+[ -n "$CWD" ] || CWD=$PWD
+set -- --json --cwd "$CWD"
+ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) && set -- "$@" --project-root "$ROOT"
+
+# stdout only: warnings about a broken rules file go to stderr, where the
+# agent shows them, instead of into the JSON parsed below.
+RESULT=$(sh-guard "$@" "$COMMAND")
 EC=$?
 if [ "$EC" -eq 3 ]; then
-  REASON=$(echo "$RESULT" | jq -r '.reason // "Blocked by sh-guard"' 2>/dev/null)
-  echo "sh-guard BLOCKED: $REASON" >&2
+  REASON=$(printf '%s' "$RESULT" | jq -r '.reason // "Blocked by sh-guard"' 2>/dev/null)
+  echo "sh-guard BLOCKED: ${REASON:-Blocked by sh-guard}" >&2
   exit 2
 fi
 exit 0
