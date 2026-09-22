@@ -172,12 +172,33 @@ impl RuleConfig {
     /// Load one rules file. `trust` says how far its risk-lowering effects
     /// are honored.
     pub fn from_file(path: &Path, trust: Trust) -> Option<Self> {
-        let content = std::fs::read_to_string(path).ok()?;
-        Self::from_toml(&content, trust)
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(e) => {
+                warn(format!("cannot read {}: {}", path.display(), e));
+                return None;
+            }
+        };
+        Self::from_toml_named(&content, trust, &path.display().to_string())
     }
 
     pub fn from_toml(content: &str, trust: Trust) -> Option<Self> {
-        let table: toml::Table = content.parse().ok()?;
+        Self::from_toml_named(content, trust, "rules")
+    }
+
+    /// `source` names the file in any warning, so a person can tell which
+    /// of their two rules files a complaint is about.
+    pub fn from_toml_named(content: &str, trust: Trust, source: &str) -> Option<Self> {
+        let table: toml::Table = match content.parse() {
+            Ok(table) => table,
+            // One syntax error used to discard every rule in the file
+            // without a word, which reads exactly like a rule that does
+            // not match.
+            Err(e) => {
+                warn(format!("{}: ignoring the whole file — {}", source, e));
+                return None;
+            }
+        };
         let mut config = RuleConfig::default();
 
         for item in table
@@ -198,19 +219,40 @@ impl RuleConfig {
             .flatten()
         {
             let Some(tbl) = item.as_table() else { continue };
-            let when = parse_when(tbl.get("when").and_then(|v| v.as_table()));
-            let then = parse_then(tbl.get("then").and_then(|v| v.as_table()));
+            let name = tbl
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unnamed rule")
+                .to_string();
+            let where_ = format!("{}: rule \"{}\"", source, name);
+
+            // An unrecognized value in the vocabulary is a typo, and a
+            // rule built on one would not mean what it says.
+            let (when, then) = match (
+                parse_when(tbl.get("when").and_then(|v| v.as_table()), &where_),
+                parse_then(tbl.get("then").and_then(|v| v.as_table()), &where_),
+            ) {
+                (Some(when), Some(then)) => (when, then),
+                _ => continue,
+            };
+
             // A rule with no conditions would match everything; a rule with
             // no effects does nothing. Both are mistakes, not licences.
-            if when.is_empty() || then.is_empty() {
+            if when.is_empty() {
+                warn(format!("{} has no conditions — ignored", where_));
+                continue;
+            }
+            if then.is_empty() {
+                warn(format!(
+                    "{} has no effect — ignored. `reason` alone does nothing; \
+                     pair it with decision, score, intent, reversibility or \
+                     sensitivity",
+                    where_
+                ));
                 continue;
             }
             config.rules.push(Rule {
-                name: tbl
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unnamed rule")
-                    .to_string(),
+                name,
                 when,
                 then,
                 trust,
@@ -276,9 +318,11 @@ impl RuleConfig {
     }
 }
 
-fn parse_when(table: Option<&toml::Table>) -> When {
+fn parse_when(table: Option<&toml::Table>, where_: &str) -> Option<When> {
     let mut when = When::default();
-    let Some(table) = table else { return when };
+    let Some(table) = table else {
+        return Some(when);
+    };
 
     when.command = patterns(table.get("command"));
     when.subcommand = patterns(table.get("subcommand"));
@@ -288,20 +332,44 @@ fn parse_when(table: Option<&toml::Table>) -> When {
     when.project = patterns(table.get("project"));
     when.flag = flag_conditions(table.get("flag"));
     when.env = flag_conditions(table.get("env"));
-    when.intent = strings(table.get("intent"))
-        .iter()
-        .map(|s| crate::rules::parse_intent(Some(s)))
-        .collect();
-    when.risk_factor = strings(table.get("risk_factor"))
-        .iter()
-        .filter_map(|s| parse_risk_factor(s))
-        .collect();
+    when.intent = vocabulary(table.get("intent"), "intent", where_)?;
+    when.risk_factor = vocabulary(table.get("risk_factor"), "risk_factor", where_)?;
     when.shell = match table.get("shell").and_then(|v| v.as_str()) {
         Some("zsh") => Some(Shell::Zsh),
         Some("bash") => Some(Shell::Bash),
-        _ => None,
+        Some(other) => {
+            warn(format!(
+                "{}: shell = \"{}\" is not bash or zsh — rule ignored",
+                where_, other
+            ));
+            return None;
+        }
+        None => None,
     };
-    when
+    Some(when)
+}
+
+/// Parse every string under `key` as vocabulary term `T`, refusing the
+/// whole rule if any of them is not a term.
+fn vocabulary<T: serde::de::DeserializeOwned>(
+    value: Option<&toml::Value>,
+    key: &str,
+    where_: &str,
+) -> Option<Vec<T>> {
+    let mut parsed = Vec::new();
+    for text in strings(value) {
+        match parse_enum(&text) {
+            Some(term) => parsed.push(term),
+            None => {
+                warn(format!(
+                    "{}: {} = \"{}\" is not a known value — rule ignored",
+                    where_, key, text
+                ));
+                return None;
+            }
+        }
+    }
+    Some(parsed)
 }
 
 impl When {
@@ -321,36 +389,40 @@ impl When {
 }
 
 impl Then {
+    /// `reason` is deliberately not an effect: it only ever replaces the
+    /// text of a decision another effect makes. `mitre` is one — it adds a
+    /// technique mapping to the result on its own.
     fn is_empty(&self) -> bool {
         self.decision.is_none()
             && self.intent.is_none()
             && self.reversibility.is_none()
             && self.sensitivity.is_none()
             && self.score.is_none()
+            && self.mitre.is_none()
     }
 }
 
-fn parse_then(table: Option<&toml::Table>) -> Then {
+fn parse_then(table: Option<&toml::Table>, where_: &str) -> Option<Then> {
     let mut then = Then::default();
-    let Some(table) = table else { return then };
+    let Some(table) = table else {
+        return Some(then);
+    };
 
     then.decision = match table.get("decision").and_then(|v| v.as_str()) {
         Some("allow") => Some(Decision::Allow),
         Some("block") => Some(Decision::Block),
-        _ => None,
+        Some(other) => {
+            warn(format!(
+                "{}: decision = \"{}\" is not allow or block — rule ignored",
+                where_, other
+            ));
+            return None;
+        }
+        None => None,
     };
-    then.intent = table
-        .get("intent")
-        .and_then(|v| v.as_str())
-        .map(|s| crate::rules::parse_intent(Some(s)));
-    then.reversibility = table
-        .get("reversibility")
-        .and_then(|v| v.as_str())
-        .map(|s| crate::rules::parse_reversibility(Some(s)));
-    then.sensitivity = table
-        .get("sensitivity")
-        .and_then(|v| v.as_str())
-        .map(|s| crate::rules::parse_sensitivity(Some(s)));
+    then.intent = term(table.get("intent"), "intent", where_)?;
+    then.reversibility = term(table.get("reversibility"), "reversibility", where_)?;
+    then.sensitivity = term(table.get("sensitivity"), "sensitivity", where_)?;
     then.mitre = table
         .get("mitre")
         .and_then(|v| v.as_str())
@@ -372,7 +444,29 @@ fn parse_then(table: Option<&toml::Table>) -> Then {
             cap: read("cap"),
         });
     }
-    then
+    Some(then)
+}
+
+/// Parse the single string under `key` as vocabulary term `T`. Absent is
+/// fine; present but unrecognized refuses the whole rule.
+fn term<T: serde::de::DeserializeOwned>(
+    value: Option<&toml::Value>,
+    key: &str,
+    where_: &str,
+) -> Option<Option<T>> {
+    match value.and_then(|v| v.as_str()) {
+        None => Some(None),
+        Some(text) => match parse_enum(text) {
+            Some(term) => Some(Some(term)),
+            None => {
+                warn(format!(
+                    "{}: {} = \"{}\" is not a known value — rule ignored",
+                    where_, key, text
+                ));
+                None
+            }
+        },
+    }
 }
 
 fn strings(value: Option<&toml::Value>) -> Vec<String> {
@@ -414,8 +508,24 @@ fn flag_conditions(value: Option<&toml::Value>) -> Vec<FlagCondition> {
         .collect()
 }
 
-fn parse_risk_factor(s: &str) -> Option<RiskFactor> {
+/// Parse one of the snake_case vocabulary enums (`Intent`, `Sensitivity`,
+/// `Reversibility`, `RiskFactor`) from the spelling used in a rules file.
+///
+/// Returns `None` for anything unrecognized. A rules file is hand-written,
+/// so a typo must be reported rather than quietly resolved to a default:
+/// `intent = "reed"` silently becoming `execute` would make a rule *more*
+/// severe than its author asked for.
+fn parse_enum<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
     serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
+}
+
+/// Report a problem with a rules file on stderr.
+///
+/// Rules are configuration a person wrote by hand, and every way of getting
+/// one wrong used to fail silently. There is no logger in this crate and a
+/// wrong rule is worth interrupting for, so these go straight to stderr.
+fn warn(message: impl std::fmt::Display) {
+    eprintln!("sh-guard: {}", message);
 }
 
 fn expand_tilde(text: &str) -> String {
@@ -517,18 +627,50 @@ pub(crate) fn classification_for(
     .flatten()
 }
 
+/// Split a segment's command text into its leading `NAME=value`
+/// assignments and the arguments after the executable.
+///
+/// `AWS_PROFILE=prod deploy --env production` gives
+/// `([("AWS_PROFILE", "prod")], ["--env", "production"])`. Treating the first
+/// token as the executable instead would drop the assignment and count
+/// `deploy` as an argument — and a subcommand.
+pub(crate) fn split_command(command: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let mut tokens = command.split_whitespace();
+    let mut env = Vec::new();
+    for token in tokens.by_ref() {
+        match env_assignment(token) {
+            Some(pair) => env.push(pair),
+            None => break, // the executable, consumed
+        }
+    }
+    (env, tokens.map(String::from).collect())
+}
+
+/// `NAME=value`, where NAME is a shell identifier.
+fn env_assignment(token: &str) -> Option<(String, String)> {
+    let (name, value) = token.split_once('=')?;
+    let mut chars = name.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_alphabetic() || first == '_')
+        || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    Some((
+        name.to_string(),
+        value.trim_matches(['\'', '"']).to_string(),
+    ))
+}
+
 /// The MITRE id a rule attaches to `executable` as invoked in `command`.
 pub(crate) fn active_mitre(executable: &str, command: &str) -> Option<String> {
-    let args = command
-        .split_whitespace()
-        .skip(1)
-        .map(String::from)
-        .collect::<Vec<_>>();
+    let (env, args) = split_command(command);
     let ctx = MatchContext {
         executable: executable.to_string(),
         subcommands: subcommand_path(&args),
         flags: flag_pairs(&args),
         args,
+        env,
         ..Default::default()
     };
     active(|config| {

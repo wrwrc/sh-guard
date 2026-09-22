@@ -80,11 +80,12 @@ fn apply_rule_effects(
     let mut decision: Option<(custom_rules::Decision, String)> = None;
 
     for analysis in analyses.iter_mut() {
+        let (env, args) = custom_rules::split_command(&analysis.command);
         let match_ctx = custom_rules::MatchContext {
             executable: analysis.executable.clone().unwrap_or_default(),
-            subcommands: custom_rules::subcommand_path(&split_args(&analysis.command)),
-            flags: custom_rules::flag_pairs(&split_args(&analysis.command)),
-            args: split_args(&analysis.command),
+            subcommands: custom_rules::subcommand_path(&args),
+            flags: custom_rules::flag_pairs(&args),
+            args,
             paths: analysis
                 .targets
                 .iter()
@@ -92,7 +93,7 @@ fn apply_rule_effects(
                 .collect(),
             intents: analysis.intent.clone(),
             risk_factors: analysis.risk_factors.clone(),
-            env: vec![],
+            env,
             cwd: context.and_then(|c| c.cwd.clone()),
             project: context.and_then(|c| c.project_root.clone()),
             shell,
@@ -161,15 +162,6 @@ fn bounded(current: u8, proposed: u8, trusted: bool, severe: bool) -> u8 {
         return current;
     }
     proposed.max(UNTRUSTED_SCORE_FLOOR).min(current)
-}
-
-/// Best-effort argv for a segment's raw text, for rule matching.
-fn split_args(command: &str) -> Vec<String> {
-    command
-        .split_whitespace()
-        .skip(1)
-        .map(String::from)
-        .collect()
 }
 
 /// Classify a shell command and return a rich analysis.

@@ -245,3 +245,198 @@ fn rules_do_not_leak_between_classifications() {
         .intent
         .contains(&Intent::Execute));
 }
+
+// ========================================================================
+// Loading: every way of writing a rule wrong is visible, never silent
+// ========================================================================
+
+fn load(rules: &str) -> RuleConfig {
+    RuleConfig::from_toml(rules, Trust::Full).expect("parse")
+}
+
+#[test]
+fn env_conditions_apply_to_decisions_and_scores() {
+    // `env` used to be collected for classification only, so a rule that
+    // combined it with `decision` or `score` never fired.
+    let rules = r#"
+[[rules]]
+when = { command = "deploy", env = { AWS_PROFILE = "prod" } }
+then = { decision = "block", reason = "prod profile" }
+
+[[rules]]
+when = { command = "kubectl", subcommand = "delete", env = { KUBECONFIG = "*kind*" } }
+then = { score = { cap = 15 } }
+"#;
+    let blocked = analyze(rules, Trust::Full, "AWS_PROFILE=prod deploy");
+    assert_eq!(blocked.score, 100);
+    assert_eq!(blocked.reason, "prod profile");
+
+    assert!(analyze(rules, Trust::Full, "AWS_PROFILE=dev deploy").score < 100);
+    assert!(analyze(rules, Trust::Full, "deploy").score < 100);
+
+    // The assignment is not mistaken for the executable, so the verb after
+    // it is still the subcommand.
+    assert_eq!(
+        analyze(
+            rules,
+            Trust::Full,
+            "KUBECONFIG=/tmp/kind.cfg kubectl delete pod x"
+        )
+        .score,
+        15
+    );
+}
+
+#[test]
+fn an_env_prefix_does_not_shift_arguments_or_subcommands() {
+    let rules = r#"
+[[rules]]
+when = { command = "tool", subcommand = "tool" }
+then = { score = { set = 99 } }
+
+[[rules]]
+when = { command = "tool", arg = "tool" }
+then = { score = { set = 98 } }
+"#;
+    // Before, `A=1 tool run` produced args ["tool", "run"]: the executable
+    // counted as an argument and as a subcommand.
+    assert!(analyze(rules, Trust::Full, "A=1 tool run").score < 98);
+}
+
+#[test]
+fn a_mitre_only_rule_is_an_effect() {
+    let result = analyze(
+        r#"
+[[rules]]
+when = { command = "mytool" }
+then = { mitre = "T1059" }
+"#,
+        Trust::Full,
+        "mytool x",
+    );
+    assert!(result
+        .mitre_mappings
+        .iter()
+        .any(|m| m.technique_id == "T1059"));
+}
+
+#[test]
+fn a_reason_only_rule_is_still_not_an_effect() {
+    // `reason` only ever replaces the text of a decision another effect
+    // makes, so on its own it would do nothing.
+    let config = load(
+        r#"
+[[rules]]
+when = { command = "mytool" }
+then = { reason = "a label" }
+"#,
+    );
+    assert!(config.rules.is_empty());
+}
+
+#[test]
+fn a_syntax_error_is_reported_not_swallowed() {
+    // Still discards the file — there is no sound way to recover a
+    // half-parsed TOML document — but it now says so on stderr.
+    assert!(RuleConfig::from_toml("[[rules]\nbroken", Trust::Full).is_none());
+}
+
+#[test]
+fn an_unknown_intent_drops_the_rule_instead_of_meaning_execute() {
+    // `intent = "reed"` used to resolve to `execute` (weight 50): a typo
+    // made the rule quietly more severe than its author asked for.
+    let config = load(
+        r#"
+[[rules]]
+name = "typo"
+when = { command = "mytool" }
+then = { intent = "reed" }
+
+[[rules]]
+name = "fine"
+when = { command = "othertool" }
+then = { intent = "read" }
+"#,
+    );
+    let names: Vec<_> = config.rules.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["fine"],
+        "the valid rule in the same file still loads"
+    );
+}
+
+#[test]
+fn an_unknown_risk_factor_drops_the_rule_instead_of_widening_it() {
+    // An unrecognized `risk_factor` used to be filtered out, which removed
+    // the condition and made the rule match *more* commands than written.
+    let config = load(
+        r#"
+[[rules]]
+when = { command = "rm", risk_factor = "recursive-delete" }
+then = { decision = "allow" }
+"#,
+    );
+    assert!(config.rules.is_empty());
+    assert!(
+        classify_with_rules("rm -rf build", None, Some(&config)).score > 0,
+        "must not have become `allow every rm`"
+    );
+}
+
+#[test]
+fn every_vocabulary_key_rejects_an_unknown_value() {
+    for (when, then) in [
+        (r#"{ intent = "delet" }"#, r#"{ score = { raise = 5 } }"#),
+        (r#"{ command = "x" }"#, r#"{ intent = "reed" }"#),
+        (r#"{ command = "x" }"#, r#"{ reversibility = "undoable" }"#),
+        (r#"{ path = "*.x" }"#, r#"{ sensitivity = "secret" }"#),
+        (r#"{ command = "x" }"#, r#"{ decision = "deny" }"#),
+        (
+            r#"{ command = "x", shell = "fish" }"#,
+            r#"{ score = { raise = 5 } }"#,
+        ),
+    ] {
+        let config = load(&format!("[[rules]]\nwhen = {when}\nthen = {then}\n"));
+        assert!(config.rules.is_empty(), "accepted when={when} then={then}");
+    }
+}
+
+#[test]
+fn every_documented_vocabulary_value_is_accepted() {
+    for intent in [
+        "info",
+        "search",
+        "read",
+        "write",
+        "package_install",
+        "git_mutation",
+        "env_modify",
+        "network",
+        "process_control",
+        "delete",
+        "execute",
+        "privilege",
+    ] {
+        let config = load(&format!(
+            "[[rules]]\nwhen = {{ command = \"x\" }}\nthen = {{ intent = \"{intent}\" }}\n"
+        ));
+        assert_eq!(config.rules.len(), 1, "rejected intent {intent}");
+    }
+    for sensitivity in ["normal", "config", "protected", "system", "secrets"] {
+        let config = load(&format!(
+            "[[rules]]\nwhen = {{ path = \"*.x\" }}\nthen = {{ sensitivity = \"{sensitivity}\" }}\n"
+        ));
+        assert_eq!(config.rules.len(), 1, "rejected sensitivity {sensitivity}");
+    }
+    for reversibility in ["reversible", "hard_to_reverse", "irreversible"] {
+        let config = load(&format!(
+            "[[rules]]\nwhen = {{ command = \"x\" }}\nthen = {{ reversibility = \"{reversibility}\" }}\n"
+        ));
+        assert_eq!(
+            config.rules.len(),
+            1,
+            "rejected reversibility {reversibility}"
+        );
+    }
+}

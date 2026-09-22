@@ -74,6 +74,21 @@
 - The Python extension module links on macOS: a build script now emits the
   `-undefined dynamic_lookup` arguments PyO3 requires, so `cargo build
   --workspace` no longer fails on undefined `_Py*` symbols.
+- Rules files no longer fail silently. Every way of writing a rule wrong now
+  prints a `sh-guard:` warning on stderr naming the file and rule:
+  - a TOML syntax error, which discards the whole file;
+  - a rule with no conditions or no effects;
+  - an unrecognized `intent`, `risk_factor`, `sensitivity`, `reversibility`,
+    `decision` or `shell` — the rule is now ignored instead of resolved to a
+    default. A typo in `then.intent` used to mean `execute`, making the rule
+    quietly more severe; a typo in `when.risk_factor` used to delete the
+    condition, making the rule match *more* commands than written.
+- `when.env` conditions now apply to `decision` and `score` effects, not only
+  to classification. `AWS_PROFILE=prod deploy` can be blocked by environment.
+- A leading `NAME=value` assignment is no longer mistaken for the executable
+  when rules are matched, which had shifted every argument by one and made
+  the real executable look like a subcommand.
+- A rule whose only effect is `mitre` is kept; it was dropped as effectless.
 
 
 ## 0.1.0 (2026-04-03)
