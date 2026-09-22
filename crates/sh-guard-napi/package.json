@@ -11,14 +11,13 @@
   },
   "keywords": ["security", "shell", "bash", "safety", "classifier", "ai-agent", "mcp"],
   "napi": {
-    "name": "sh-guard",
-    "triples": {}
+    "binaryName": "sh-guard"
   },
   "scripts": {
     "build": "napi build --release --platform",
     "test": "node test.js"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^2"
+    "@napi-rs/cli": "^3"
   }
 }

@@ -54,11 +54,11 @@ fn classify(
     py: Python<'_>,
     command: &str,
     context: Option<&Bound<'_, PyDict>>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let ctx = context.map(parse_context).transpose()?;
     let result = sh_guard_core::classify(command, ctx.as_ref());
     let dict = result_to_pydict(py, &result)?;
-    Ok(dict.into())
+    Ok(dict.unbind())
 }
 
 /// Return just the numeric risk score (0-100) for a command.
@@ -93,7 +93,7 @@ fn classify_batch(
     py: Python<'_>,
     commands: Vec<String>,
     context: Option<&Bound<'_, PyDict>>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let ctx = context.map(parse_context).transpose()?;
     let strs: Vec<&str> = commands.iter().map(|s| s.as_str()).collect();
     let results = sh_guard_core::classify_batch(&strs, ctx.as_ref());
@@ -103,7 +103,7 @@ fn classify_batch(
 
     let json_mod = py.import("json")?;
     let list = json_mod.call_method1("loads", (json_str,))?;
-    Ok(list.into())
+    Ok(list.unbind())
 }
 
 /// Python module definition for sh_guard.
