@@ -280,6 +280,19 @@ impl RuleConfig {
         Some(config)
     }
 
+    /// Put `other`'s rules after this config's own, so they are applied
+    /// later and win a conflict.
+    ///
+    /// Used to layer a file named with `--rules` on top of the discovered
+    /// ones. `other`'s `trust` list is kept but decides nothing: which
+    /// project file is trusted is settled when [`RuleConfig::discover`]
+    /// loads it, from the user's own file.
+    pub fn layer(mut self, other: RuleConfig) -> RuleConfig {
+        self.rules.extend(other.rules);
+        self.trust.extend(other.trust);
+        self
+    }
+
     /// Load the user's rules and the project's, in that order.
     ///
     /// The user's file may mark project roots as trusted; a project's own

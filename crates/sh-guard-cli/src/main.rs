@@ -5,7 +5,7 @@ use std::process;
 
 use clap::Parser;
 use colored::Colorize;
-use sh_guard_core::{classify, AnalysisResult, ClassifyContext, RiskLevel, Shell};
+use sh_guard_core::{AnalysisResult, ClassifyContext, RiskLevel, Shell};
 
 // ---------------------------------------------------------------------------
 // CLI argument definition
@@ -51,9 +51,15 @@ struct Cli {
     #[arg(long, default_value = "bash")]
     shell: String,
 
-    /// Path to custom rules TOML file
+    /// Extra rules TOML file, applied on top of ~/.config/sh-guard/rules.toml
+    /// and the project's .sh-guard.toml (its rules win a conflict)
     #[arg(long)]
     rules: Option<String>,
+
+    /// Don't read ~/.config/sh-guard/rules.toml or the project's
+    /// .sh-guard.toml; use only the file given with --rules, if any
+    #[arg(long)]
+    no_default_rules: bool,
 
     /// Suppress output, only set exit code
     #[arg(long, short)]
@@ -191,11 +197,9 @@ fn analyse_one(
     rules_config: Option<&sh_guard_core::custom_rules::RuleConfig>,
     cli: &Cli,
 ) -> i32 {
-    let result = if let Some(rules) = rules_config {
-        sh_guard_core::classify_with_rules(command, context, Some(rules))
-    } else {
-        classify(command, context)
-    };
+    // Rules were resolved once in `main` (discovery included), so every
+    // command in a --stdin batch sees the same set.
+    let result = sh_guard_core::classify_with_rules(command, context, rules_config);
 
     if !cli.quiet {
         if cli.json {
@@ -236,8 +240,12 @@ fn main() {
         process::exit(1);
     }
 
-    // Load custom rules
-    let rules_config = if let Some(ref rules_path) = cli.rules {
+    let context = build_context(&cli);
+    let ctx_ref = context.as_ref();
+
+    // Load custom rules: the discovered files, then the one named with
+    // --rules layered on top so its rules are applied last and win.
+    let explicit = if let Some(ref rules_path) = cli.rules {
         let path = std::path::Path::new(rules_path);
         if !path.exists() {
             eprintln!("Warning: rules file not found: {}", rules_path);
@@ -253,9 +261,15 @@ fn main() {
     } else {
         None
     };
-
-    let context = build_context(&cli);
-    let ctx_ref = context.as_ref();
+    let defaults = if cli.no_default_rules {
+        None
+    } else {
+        sh_guard_core::custom_rules::RuleConfig::discover(ctx_ref)
+    };
+    let rules_config = match (defaults, explicit) {
+        (Some(defaults), Some(explicit)) => Some(defaults.layer(explicit)),
+        (defaults, explicit) => defaults.or(explicit),
+    };
     let rules_ref = rules_config.as_ref();
 
     if cli.stdin {
