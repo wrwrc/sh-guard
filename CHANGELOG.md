@@ -33,7 +33,15 @@
 
 - Removed the unused second rules loader (`rules::RuleSet`).
 
+- **`--rules <file>` now layers on top of the default rules files** instead of
+  replacing them. Its rules are applied after the user's and the project's,
+  so they win a conflict. To get the old behavior, add `--no-default-rules`.
+
 ### Added
+
+- `--no-default-rules` skips `~/.config/sh-guard/rules.toml` and the project's
+  `.sh-guard.toml`, leaving only the file given with `--rules`, if any — the
+  way to test one rules file in isolation.
 
 - Subcommand/flag-aware classification for `git`, `gh`, `kubectl`, `find`/`fd`,
   `xargs`, `docker`/`podman`, the npm family, `systemctl`/`service`, the OS and

@@ -253,3 +253,112 @@ fn cli_stdin_json_each_line_is_valid() {
         assert!(parsed["command"].is_string());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Rules files: --rules layers on top of the discovered defaults
+// ---------------------------------------------------------------------------
+
+/// A home directory holding `~/.config/sh-guard/rules.toml`, a project
+/// directory holding `.sh-guard.toml`, and a separate file for `--rules`.
+struct RulesFixture {
+    home: tempfile::TempDir,
+    project: tempfile::TempDir,
+    extra: std::path::PathBuf,
+}
+
+fn rule(command: &str, score: u8) -> String {
+    format!("[[rules]]\nwhen = {{ command = \"{command}\" }}\nthen = {{ score = {{ set = {score} }} }}\n\n")
+}
+
+fn rules_fixture() -> RulesFixture {
+    let home = tempfile::tempdir().unwrap();
+    let config = home.path().join(".config/sh-guard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("rules.toml"),
+        rule("zz-user", 11) + &rule("zz-shared", 12),
+    )
+    .unwrap();
+
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join(".sh-guard.toml"),
+        rule("zz-project", 31),
+    )
+    .unwrap();
+
+    let extra = home.path().join("extra.toml");
+    std::fs::write(&extra, rule("zz-extra", 7) + &rule("zz-shared", 8)).unwrap();
+
+    RulesFixture {
+        home,
+        project,
+        extra,
+    }
+}
+
+fn score_with(fixture: &RulesFixture, args: &[&str], command: &str) -> u64 {
+    let output = sh_guard()
+        .env("HOME", fixture.home.path())
+        .arg("--cwd")
+        .arg(fixture.project.path())
+        .args(args)
+        .args(["--json", command])
+        .output()
+        .unwrap();
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("output should be valid JSON");
+    parsed["score"].as_u64().unwrap()
+}
+
+#[test]
+fn cli_reads_user_and_project_rules_by_default() {
+    let f = rules_fixture();
+    assert_eq!(score_with(&f, &[], "zz-user"), 11);
+    assert_eq!(score_with(&f, &[], "zz-project"), 31);
+}
+
+#[test]
+fn cli_rules_flag_layers_on_top_of_the_defaults() {
+    let f = rules_fixture();
+    let extra = f.extra.to_str().unwrap();
+    // The extra file's own rule applies...
+    assert_eq!(score_with(&f, &["--rules", extra], "zz-extra"), 7);
+    // ...without switching off the user's or the project's.
+    assert_eq!(score_with(&f, &["--rules", extra], "zz-user"), 11);
+    assert_eq!(score_with(&f, &["--rules", extra], "zz-project"), 31);
+    // Applied last, so it wins where both speak.
+    assert_eq!(score_with(&f, &["--rules", extra], "zz-shared"), 8);
+}
+
+/// What a command no rule mentions scores in the fixture's context.
+fn unruled(fixture: &RulesFixture) -> u64 {
+    score_with(fixture, &[], "zz-nobody")
+}
+
+#[test]
+fn cli_no_default_rules_uses_only_the_named_file() {
+    let f = rules_fixture();
+    let extra = f.extra.to_str().unwrap();
+    let args = ["--no-default-rules", "--rules", extra];
+    assert_eq!(score_with(&f, &args, "zz-extra"), 7);
+    assert_eq!(
+        score_with(&f, &args, "zz-user"),
+        unruled(&f),
+        "user file must not load"
+    );
+    assert_eq!(
+        score_with(&f, &args, "zz-project"),
+        unruled(&f),
+        "project file must not load"
+    );
+}
+
+#[test]
+fn cli_no_default_rules_alone_applies_no_rules() {
+    let f = rules_fixture();
+    assert_eq!(
+        score_with(&f, &["--no-default-rules"], "zz-user"),
+        unruled(&f)
+    );
+}

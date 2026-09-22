@@ -885,6 +885,7 @@ dependencies = [
  "colored",
  "serde_json",
  "sh-guard-core",
+ "tempfile",
 ]
 
 [[package]]
