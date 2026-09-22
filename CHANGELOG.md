@@ -48,6 +48,12 @@
   everywhere and MITRE ids on custom rules.
 - 65 common utilities and shell builtins in the command table.
 
+### Changed
+
+- Dependencies updated to their latest releases: `tree-sitter` 0.26 → 0.27,
+  `pyo3` 0.23 → 0.29, and `napi`/`napi-derive` 2 → 3 with `@napi-rs/cli` 2 → 3.
+  The Python and Node bindings keep the same public API.
+
 ### Fixed
 
 - Commands inside compound statements (`for`, `while`, `if`, `case`, `{ }`,
@@ -65,6 +71,9 @@
   execution.
 - Custom rules apply to auto-discovered configuration, not just to a file
   passed with `--rules`.
+- The Python extension module links on macOS: a build script now emits the
+  `-undefined dynamic_lookup` arguments PyO3 requires, so `cargo build
+  --workspace` no longer fails on undefined `_Py*` symbols.
 
 
 ## 0.1.0 (2026-04-03)
