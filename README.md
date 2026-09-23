@@ -64,7 +64,7 @@ This auto-detects and configures every installed agent:
 
 | Agent | Integration |
 |-------|------------|
-| **Claude Code** | PreToolUse hook &mdash; blocks critical commands automatically |
+| **Claude Code** | PreToolUse hook &mdash; blocks critical commands automatically, pre-approves safe ones, always asks before dangerous ones |
 | **Codex CLI** | PreToolUse hook &mdash; same protection |
 | **Cursor** | MCP server &mdash; agent calls `sh_guard_classify` before shell commands |
 | **Cline** | MCP server |

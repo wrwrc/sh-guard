@@ -381,6 +381,42 @@ fn installed_hook() -> (tempfile::TempDir, std::path::PathBuf) {
     (home, hook)
 }
 
+#[test]
+fn setup_backs_up_a_changed_hook_before_rewriting_it() {
+    let (home, hook) = installed_hook();
+    let backup = home.path().join(".sh-guard/hook.sh.bak");
+    let setup = || {
+        let out = sh_guard()
+            .env("HOME", home.path())
+            .arg("--setup")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "--setup failed: {:?}", out);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    // A fresh install has nothing to back up.
+    assert!(!backup.exists());
+
+    let installed = std::fs::read_to_string(&hook).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\n# my edits\n").unwrap();
+    let stdout = setup();
+    assert!(stdout.contains("backed up to"), "stdout: {stdout}");
+    assert_eq!(
+        std::fs::read_to_string(&backup).unwrap(),
+        "#!/bin/sh\n# my edits\n"
+    );
+    assert_eq!(std::fs::read_to_string(&hook).unwrap(), installed);
+
+    // Re-running over an unchanged hook keeps the earlier backup.
+    let stdout = setup();
+    assert!(!stdout.contains("backed up to"), "stdout: {stdout}");
+    assert_eq!(
+        std::fs::read_to_string(&backup).unwrap(),
+        "#!/bin/sh\n# my edits\n"
+    );
+}
+
 /// Run the hook as an agent would: tool input JSON on stdin, `sh-guard` on
 /// PATH. Returns (exit code, stderr).
 fn run_hook(
@@ -389,6 +425,19 @@ fn run_hook(
     command: &str,
     cwd: &std::path::Path,
 ) -> (i32, String) {
+    let (code, _, stderr) = run_hook_as(home, hook, command, cwd, None);
+    (code, stderr)
+}
+
+/// Like `run_hook`, optionally as Claude Code runs it (with
+/// `CLAUDE_PROJECT_DIR` set). Returns (exit code, stdout, stderr).
+fn run_hook_as(
+    home: &std::path::Path,
+    hook: &std::path::Path,
+    command: &str,
+    cwd: &std::path::Path,
+    claude_project_dir: Option<&std::path::Path>,
+) -> (i32, String, String) {
     let bin_dir = std::path::Path::new(env!("CARGO_BIN_EXE_sh-guard"))
         .parent()
         .unwrap()
@@ -402,10 +451,13 @@ fn run_hook(
         "tool_input": { "command": command },
         "cwd": cwd,
     });
-    let mut child = Command::new("sh")
-        .arg(hook)
-        .env("HOME", home)
-        .env("PATH", path)
+    let mut cmd = Command::new("sh");
+    cmd.arg(hook).env("HOME", home).env("PATH", path);
+    match claude_project_dir {
+        Some(dir) => cmd.env("CLAUDE_PROJECT_DIR", dir),
+        None => cmd.env_remove("CLAUDE_PROJECT_DIR"),
+    };
+    let mut child = cmd
         // The hook must use the `cwd` from the input, not its own.
         .current_dir(std::env::temp_dir())
         .stdin(std::process::Stdio::piped())
@@ -422,6 +474,7 @@ fn run_hook(
     let output = child.wait_with_output().unwrap();
     (
         output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
 }
@@ -508,4 +561,60 @@ fn hook_keeps_the_block_reason_when_a_rules_file_warns() {
         stderr.contains("sh-guard BLOCKED: ") && !stderr.contains("sh-guard BLOCKED: \n"),
         "reason lost; stderr: {stderr}"
     );
+}
+
+/// The permission decision the hook gives Claude Code for `command`, if any.
+fn claude_decision(
+    home: &std::path::Path,
+    hook: &std::path::Path,
+    command: &str,
+    cwd: &std::path::Path,
+) -> Option<(String, String)> {
+    let (code, stdout, stderr) = run_hook_as(home, hook, command, cwd, Some(cwd));
+    assert_eq!(code, 0, "{command}: stderr: {stderr}");
+    if stdout.trim().is_empty() {
+        return None;
+    }
+    let out: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("{command}: hook stdout is not JSON ({e}): {stdout:?}"));
+    let specific = &out["hookSpecificOutput"];
+    assert_eq!(specific["hookEventName"], "PreToolUse");
+    Some((
+        specific["permissionDecision"].as_str().unwrap().to_string(),
+        specific["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+    ))
+}
+
+#[test]
+fn hook_sets_claude_code_permission_decisions_by_level() {
+    if !have("jq") {
+        eprintln!("skipping: jq not installed");
+        return;
+    }
+    let (home, hook) = installed_hook();
+    let project = tempfile::tempdir().unwrap();
+    let decide = |command| claude_decision(home.path(), &hook, command, project.path());
+
+    // SAFE: allowed without a permission prompt.
+    let (decision, reason) = decide("ls").expect("SAFE should get a decision");
+    assert_eq!(decision, "allow");
+    assert!(reason.starts_with("sh-guard SAFE: "), "reason: {reason}");
+
+    // CAUTION: no decision, so the normal permission flow runs.
+    assert_eq!(decide("git push"), None);
+
+    // DANGER: always prompt, even if an allow rule would match.
+    let (decision, reason) = decide("git push --force").expect("DANGER should get a decision");
+    assert_eq!(decision, "ask");
+    assert!(reason.starts_with("sh-guard DANGER: "), "reason: {reason}");
+
+    // Outside Claude Code (e.g. Codex), the hook stays silent.
+    for command in ["ls", "git push --force"] {
+        let (code, stdout, _) = run_hook_as(home.path(), &hook, command, project.path(), None);
+        assert_eq!(code, 0);
+        assert!(stdout.trim().is_empty(), "{command}: stdout: {stdout}");
+    }
 }
