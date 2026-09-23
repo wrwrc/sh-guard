@@ -161,11 +161,26 @@ fn hook_script_path() -> Option<PathBuf> {
     home().map(|h| h.join(".sh-guard").join("hook.sh"))
 }
 
-fn ensure_hook_script() -> Result<PathBuf, String> {
+/// Write the hook script, returning its path and, when an existing script
+/// with different contents was replaced, where that script was backed up.
+fn ensure_hook_script() -> Result<(PathBuf, Option<PathBuf>), String> {
     let path = hook_script_path().ok_or("Cannot determine home directory")?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
     }
+
+    // Keep the previous script (e.g. local edits, or an older release) unless
+    // it is already identical, so re-running setup doesn't clobber the backup.
+    let mut backup = None;
+    if let Ok(existing) = fs::read(&path) {
+        if existing != HOOK_SCRIPT.as_bytes() {
+            let bak = path.with_extension("sh.bak");
+            fs::write(&bak, existing)
+                .map_err(|e| format!("Failed to back up {}: {}", path.display(), e))?;
+            backup = Some(bak);
+        }
+    }
+
     fs::write(&path, HOOK_SCRIPT).map_err(|e| format!("Failed to write hook script: {}", e))?;
 
     #[cfg(unix)]
@@ -176,7 +191,7 @@ fn ensure_hook_script() -> Result<PathBuf, String> {
             .map_err(|e| format!("Failed to set permissions: {}", e))?;
     }
 
-    Ok(path)
+    Ok((path, backup))
 }
 
 // ---------------------------------------------------------------------------
@@ -370,8 +385,11 @@ pub fn run_setup() -> Result<(), String> {
 
     // Write the hook script
     let hook_path = match ensure_hook_script() {
-        Ok(p) => {
+        Ok((p, backup)) => {
             println!("  Hook script: {}", p.display());
+            if let Some(bak) = backup {
+                println!("  Previous hook script backed up to: {}", bak.display());
+            }
             p
         }
         Err(e) => {

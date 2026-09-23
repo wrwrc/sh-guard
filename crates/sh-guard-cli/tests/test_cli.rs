@@ -381,6 +381,42 @@ fn installed_hook() -> (tempfile::TempDir, std::path::PathBuf) {
     (home, hook)
 }
 
+#[test]
+fn setup_backs_up_a_changed_hook_before_rewriting_it() {
+    let (home, hook) = installed_hook();
+    let backup = home.path().join(".sh-guard/hook.sh.bak");
+    let setup = || {
+        let out = sh_guard()
+            .env("HOME", home.path())
+            .arg("--setup")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "--setup failed: {:?}", out);
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    // A fresh install has nothing to back up.
+    assert!(!backup.exists());
+
+    let installed = std::fs::read_to_string(&hook).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\n# my edits\n").unwrap();
+    let stdout = setup();
+    assert!(stdout.contains("backed up to"), "stdout: {stdout}");
+    assert_eq!(
+        std::fs::read_to_string(&backup).unwrap(),
+        "#!/bin/sh\n# my edits\n"
+    );
+    assert_eq!(std::fs::read_to_string(&hook).unwrap(), installed);
+
+    // Re-running over an unchanged hook keeps the earlier backup.
+    let stdout = setup();
+    assert!(!stdout.contains("backed up to"), "stdout: {stdout}");
+    assert_eq!(
+        std::fs::read_to_string(&backup).unwrap(),
+        "#!/bin/sh\n# my edits\n"
+    );
+}
+
 /// Run the hook as an agent would: tool input JSON on stdin, `sh-guard` on
 /// PATH. Returns (exit code, stderr).
 fn run_hook(
