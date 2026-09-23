@@ -133,6 +133,27 @@ if [ "$EC" -eq 3 ]; then
   echo "sh-guard BLOCKED: ${REASON:-Blocked by sh-guard}" >&2
   exit 2
 fi
+
+# Claude Code: pre-approve SAFE commands so they skip the permission prompt,
+# and always prompt for DANGER ones, even when an allow rule matches. CAUTION
+# falls through to the agent's normal permission flow, and the user's own
+# deny/ask rules still apply to approved commands.
+# CLAUDE_PROJECT_DIR is set only when Claude Code runs the hook.
+[ -n "$CLAUDE_PROJECT_DIR" ] || exit 0
+case "$EC" in
+  0) DECISION=allow LABEL=SAFE ;;
+  2) DECISION=ask LABEL=DANGER ;;
+  *) exit 0 ;;
+esac
+REASON=$(printf '%s' "$RESULT" | jq -r '.reason // empty' 2>/dev/null)
+jq -n --arg decision "$DECISION" \
+  --arg reason "sh-guard $LABEL: ${REASON:-$LABEL}" '{
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: $decision,
+    permissionDecisionReason: $reason
+  }
+}'
 exit 0
 "#;
 
